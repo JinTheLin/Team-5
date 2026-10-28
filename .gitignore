@@ -1,0 +1,5 @@
+# macOS folder metadata
+.DS_Store
+
+# Local WiFi credentials (copy secrets.example.h to secrets.h)
+secrets.h

@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pt
+*.mlpackage/
+runs/
+# Images and datasets are too big for git; share them through Roboflow instead.
+data/
