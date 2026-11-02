@@ -1,0 +1,10 @@
+{
+  "description": "This app supports caregivers of individuals with visual impairments by providing real-time cane connectivity, GPS tracking, alerts, and device settings for enhanced safety and assistance.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}
