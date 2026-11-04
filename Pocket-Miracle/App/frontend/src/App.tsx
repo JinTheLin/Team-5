@@ -1,4 +1,12 @@
-import { useState, type ButtonHTMLAttributes, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ButtonHTMLAttributes, type ReactNode } from "react";
+
+// The cane's ESP32 camera. If the cane gets a different address on the hotspot,
+// set VITE_CANE_IP in App/frontend/.env.local (e.g. VITE_CANE_IP=172.20.10.5) and restart the dev server.
+const CANE_IP = import.meta.env.VITE_CANE_IP || "172.20.10.3";
+const CANE_STREAM_URL = `http://${CANE_IP}:81/stream`;
+const CANE_RETRY_MS = 4000;
+
+type StreamStatus = "connecting" | "live" | "offline";
 
 type Tab = "home" | "safety" | "camera";
 type IconName =
@@ -97,8 +105,7 @@ function Home({ setTab, openSettings, caretaker }: { setTab: (tab: Tab) => void;
         <Button className="feature-card" onClick={() => setTab("camera")}>
           <div className="feature-heading"><span className="feature-icon blue"><Icon name="camera" size={19} /></span><span><strong>{caretaker ? "Request Camera" : "Live Camera"}</strong><small>{caretaker ? "Approval required" : "Detection active"}</small></span><Icon name="chevron" size={18} /></div>
           <div className="camera-mini">
-            <img src="https://images.unsplash.com/photo-1623967680551-3e4694e2c9ad?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=1080" alt="Tree-lined walking path camera preview" />
-            <span className="object-tag">Path clear</span>
+            {caretaker ? <div className="camera-mini-empty"><Icon name="cameraOff" size={17} />Camera is private</div> : <CanePreview />}
           </div>
         </Button>
       </div>
@@ -176,24 +183,97 @@ function Safety({ caretaker }: { caretaker: boolean }) {
   );
 }
 
+// Live MJPEG video from the cane. If the cane can't be reached, it keeps retrying every few
+// seconds, so the video appears on its own once the cane is turned on.
+// The ESP32 only streams to one viewer at a time, so the connection is closed when this view goes away.
+function CaneStream({ onStatus }: { onStatus: (status: StreamStatus) => void }) {
+  const img = useRef<HTMLImageElement>(null);
+
+  useEffect(() => {
+    const element = img.current;
+    if (!element) return;
+    let retryTimer = 0;
+    let heartbeat = 0;
+    let missed = 0;
+
+    const connect = () => { element.src = `${CANE_STREAM_URL}?t=${Date.now()}`; };
+    const fail = () => {
+      window.clearInterval(heartbeat);
+      heartbeat = 0;
+      window.clearTimeout(retryTimer);
+      onStatus("offline");
+      retryTimer = window.setTimeout(connect, CANE_RETRY_MS);
+    };
+    // The browser doesn't report when a running stream dies (e.g. the cane is switched off) and just
+    // freezes on the last frame, so while live, check that the cane still answers.
+    const live = () => {
+      onStatus("live");
+      if (heartbeat) return;
+      missed = 0;
+      heartbeat = window.setInterval(() => {
+        fetch(`http://${CANE_IP}/status`, { mode: "no-cors", cache: "no-store", signal: AbortSignal.timeout(3000) })
+          .then(() => { missed = 0; })
+          .catch(() => { if (++missed >= 2) fail(); });
+      }, CANE_RETRY_MS);
+    };
+
+    element.addEventListener("load", live);
+    element.addEventListener("error", fail);
+    onStatus("connecting");
+    connect();
+    return () => {
+      window.clearTimeout(retryTimer);
+      window.clearInterval(heartbeat);
+      element.removeEventListener("load", live);
+      element.removeEventListener("error", fail);
+      element.src = "";
+    };
+  }, [onStatus]);
+
+  return <img ref={img} alt="Live view from the cane's camera" />;
+}
+
+// Small live preview of the cane's camera for the Home screen.
+function CanePreview() {
+  const [stream, setStream] = useState<StreamStatus>("connecting");
+  return <>
+    <CaneStream onStatus={setStream} />
+    {stream === "offline"
+      ? <div className="camera-mini-empty"><Icon name="cameraOff" size={17} />Cane camera offline</div>
+      : <span className="object-tag">{stream === "live" ? "Live" : "Connecting…"}</span>}
+  </>;
+}
+
 function Camera({ caretaker }: { caretaker: boolean }) {
   const [sharing, setSharing] = useState(false);
   const [requested, setRequested] = useState(false);
+  const [stream, setStream] = useState<StreamStatus>("connecting");
   const feedVisible = !caretaker || sharing;
+  const showFeed = feedVisible && stream !== "offline";
 
   const request = () => {
     setRequested(true);
   };
 
+  const connection = !feedVisible
+    ? { light: "", title: "Camera private", detail: "Waiting for user approval", badge: "OFF" }
+    : stream === "live" ? { light: "online", title: "Cane camera connected", detail: `Live from cane · ${CANE_IP}`, badge: "LIVE" }
+    : stream === "offline" ? { light: "", title: "Camera offline", detail: `Can't reach the cane at ${CANE_IP} · retrying`, badge: "OFF" }
+    : { light: "", title: "Connecting to cane…", detail: CANE_IP, badge: "…" };
+
   return (
     <div className="screen camera-screen">
       <header className="page-header"><div><div className="overline">LIVE CAMERA</div><div className="page-title">{caretaker ? "See what Alex sees." : "Your surroundings."}</div></div><span className={caretaker ? (sharing ? "share-pill" : "private-pill") : "detection-pill"}><i />{caretaker ? (sharing ? " SHARED" : " PRIVATE") : " DETECTION ACTIVE"}</span></header>
-      <div className={`camera-view ${feedVisible ? "" : "camera-paused"}`}>
-        {feedVisible ? <img src="https://images.unsplash.com/photo-1623967680551-3e4694e2c9ad?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=1080" alt="Live simulated view of a tree-lined walking path" /> : <div className="camera-empty"><Icon name="cameraOff" size={36} /><strong>Camera is private</strong><small>Object detection continues locally. Live video requires Alex’s approval.</small></div>}
-        {feedVisible && <><span className="detect-box"><i>Bench · 12 ft</i></span><span className="detect-box second"><i>Pedestrian · 24 ft</i></span><span className="sim-label">OBJECT DETECTION · SIMULATED</span></>}
-        {feedVisible && <div className="object-panel"><span className="direction-arrow">↑</span><span><small>AHEAD · LOW PRIORITY</small><strong>Park bench in 12 feet</strong></span></div>}
+      <div className={`camera-view ${showFeed ? "camera-live" : "camera-paused"}`}>
+        {!feedVisible ? <div className="camera-empty"><Icon name="cameraOff" size={36} /><strong>Camera is private</strong><small>Object detection continues locally. Live video requires Alex’s approval.</small></div>
+          : <>
+              <CaneStream onStatus={setStream} />
+              {stream === "offline" && <div className="camera-empty"><Icon name="cameraOff" size={36} /><strong>Waiting for the cane…</strong><small>The video will appear on its own once the cane is on and this device is on the same hotspot. The cane streams to one viewer at a time, so close any other tab showing it.</small></div>}
+            </>}
+        {showFeed && <><span className="detect-box"><i>Bench · 12 ft</i></span><span className="detect-box second"><i>Pedestrian · 24 ft</i></span><span className="sim-label">OBJECT DETECTION · SIMULATED</span></>}
+        {showFeed && <div className="object-panel"><span className="direction-arrow">↑</span><span><small>AHEAD · LOW PRIORITY</small><strong>Park bench in 12 feet</strong></span></div>}
       </div>
-      <div className="camera-connection"><span className={`connection-light ${feedVisible ? "online" : ""}`} /><span><strong>Camera {feedVisible ? "connected" : "private"}</strong><small>{feedVisible ? "Live · 24 FPS · simulated data" : "Waiting for user approval"}</small></span><span className="connection-quality">{feedVisible ? "GOOD" : "OFF"}</span></div>
+      <div className="camera-connection"><span className={`connection-light ${connection.light}`} /><span><strong>{connection.title}</strong><small>{connection.detail}</small></span><span className="connection-quality">{connection.badge}</span></div>
       {feedVisible && <>
         <div className="camera-section-title"><span>Objects detected</span><small>Computer vision · simulated</small></div>
         <div className="detection-list">
