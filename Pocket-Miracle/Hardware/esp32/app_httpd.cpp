@@ -103,13 +103,76 @@ void enable_led(bool en) {  // Turn LED On or Off
 }
 #endif
 
+// ---------------------------------------------------------------------
+// Smart Cane: turned frames
+// The camera sits sideways on the cane, so each frame is turned by
+// CAMERA_ROTATION (board_config.h) before it's sent. The handlers below use
+// getFrame() / returnFrame() instead of esp_camera_fb_get() / _return().
+// ---------------------------------------------------------------------
+#ifndef CAMERA_ROTATION
+#define CAMERA_ROTATION 0
+#endif
+
+// Only raw RGB565 frames (what the GC0308 camera gives) can be turned.
+static bool turnsFrame(const camera_fb_t *fb) {
+  return CAMERA_ROTATION != 0 && fb->format == PIXFORMAT_RGB565;
+}
+
+static void turnPixels(const uint16_t *src, uint16_t *dst, int w, int h) {
+  for (int y = 0; y < h; y++) {
+    for (int x = 0; x < w; x++) {
+      int i;
+      if (CAMERA_ROTATION == 1)      i = x * h + (h - 1 - y);            // 90° clockwise
+      else if (CAMERA_ROTATION == 2) i = (h - 1 - y) * w + (w - 1 - x);  // 180°
+      else                           i = (w - 1 - x) * h + y;            // 90° counter-clockwise
+      dst[i] = src[y * w + x];
+    }
+  }
+}
+
+// Like esp_camera_fb_get(), but the picture is already turned.
+static camera_fb_t *getFrame() {
+  camera_fb_t *fb = esp_camera_fb_get();
+  if (fb == NULL || !turnsFrame(fb)) return fb;
+
+  camera_fb_t *turned = (camera_fb_t *)malloc(sizeof(camera_fb_t));
+  uint8_t *buf = (uint8_t *)heap_caps_malloc(fb->len, MALLOC_CAP_SPIRAM);
+  if (turned == NULL || buf == NULL) {
+    log_e("Not enough memory to turn the frame");
+    free(turned);
+    heap_caps_free(buf);
+    esp_camera_fb_return(fb);
+    return NULL;
+  }
+  *turned = *fb;  // same format, timestamp and size in bytes
+  turned->buf = buf;
+  turnPixels((const uint16_t *)fb->buf, (uint16_t *)buf, fb->width, fb->height);
+  if (CAMERA_ROTATION != 2) {  // a quarter turn swaps width and height
+    turned->width = fb->height;
+    turned->height = fb->width;
+  }
+  esp_camera_fb_return(fb);    // the camera can start on the next frame now
+  return turned;
+}
+
+// Like esp_camera_fb_return(), for frames from getFrame().
+static void returnFrame(camera_fb_t *fb) {
+  if (fb == NULL) return;
+  if (turnsFrame(fb)) {
+    heap_caps_free(fb->buf);
+    free(fb);
+  } else {
+    esp_camera_fb_return(fb);
+  }
+}
+
 static esp_err_t bmp_handler(httpd_req_t *req) {
   camera_fb_t *fb = NULL;
   esp_err_t res = ESP_OK;
 #if ARDUHAL_LOG_LEVEL >= ARDUHAL_LOG_LEVEL_INFO
   int64_t fr_start = esp_timer_get_time();
 #endif
-  fb = esp_camera_fb_get();
+  fb = getFrame();
   if (!fb) {
     log_e("Camera capture failed");
     httpd_resp_send_500(req);
@@ -128,7 +191,7 @@ static esp_err_t bmp_handler(httpd_req_t *req) {
   uint8_t *buf = NULL;
   size_t buf_len = 0;
   bool converted = frame2bmp(fb, &buf, &buf_len);
-  esp_camera_fb_return(fb);
+  returnFrame(fb);
   if (!converted) {
     log_e("BMP Conversion failed");
     httpd_resp_send_500(req);
@@ -165,10 +228,10 @@ static esp_err_t capture_handler(httpd_req_t *req) {
 #if defined(LED_GPIO_NUM)
   enable_led(true);
   vTaskDelay(150 / portTICK_PERIOD_MS);  // The LED needs to be turned on ~150ms before the call to esp_camera_fb_get()
-  fb = esp_camera_fb_get();              // or it won't be visible in the frame. A better way to do this is needed.
+  fb = getFrame();              // or it won't be visible in the frame. A better way to do this is needed.
   enable_led(false);
 #else
-  fb = esp_camera_fb_get();
+  fb = getFrame();
 #endif
 
   if (!fb) {
@@ -202,7 +265,7 @@ static esp_err_t capture_handler(httpd_req_t *req) {
     fb_len = jchunk.len;
 #endif
   }
-  esp_camera_fb_return(fb);
+  returnFrame(fb);
 #if ARDUHAL_LOG_LEVEL >= ARDUHAL_LOG_LEVEL_INFO
   int64_t fr_end = esp_timer_get_time();
 #endif
@@ -237,7 +300,7 @@ static esp_err_t stream_handler(httpd_req_t *req) {
 #endif
 
   while (true) {
-    fb = esp_camera_fb_get();
+    fb = getFrame();
     if (!fb) {
       log_e("Camera capture failed");
       res = ESP_FAIL;
@@ -246,7 +309,7 @@ static esp_err_t stream_handler(httpd_req_t *req) {
       _timestamp.tv_usec = fb->timestamp.tv_usec;
       if (fb->format != PIXFORMAT_JPEG) {
         bool jpeg_converted = frame2jpg(fb, 80, &_jpg_buf, &_jpg_buf_len);
-        esp_camera_fb_return(fb);
+        returnFrame(fb);
         fb = NULL;
         if (!jpeg_converted) {
           log_e("JPEG compression failed");
@@ -268,7 +331,7 @@ static esp_err_t stream_handler(httpd_req_t *req) {
       res = httpd_resp_send_chunk(req, (const char *)_jpg_buf, _jpg_buf_len);
     }
     if (fb) {
-      esp_camera_fb_return(fb);
+      returnFrame(fb);
       fb = NULL;
       _jpg_buf = NULL;
     } else if (_jpg_buf) {

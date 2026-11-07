@@ -84,7 +84,7 @@ This needs the updated `Hardware/esp32/app_httpd.cpp`. If the screen says "cane 
 
 ## What to expect
 
-The stock model is trained on COCO (80 everyday classes: person, chair, car, bicycle, …). **It does not know door, stairs or curb**, so this test only proves the pipeline. The cane camera (GC0308) gives 320×240 frames at a few fps; on an M2 the model takes about 10–15 ms per frame, so the camera is the bottleneck.
+The stock model is trained on COCO (80 everyday classes: person, chair, car, bicycle, …). **It does not know door, stairs or curb**, so this test only proves the pipeline. The cane camera (GC0308) gives 320×240 frames, turned upright to 240×320 on the cane (`CAMERA_ROTATION` in `Hardware/esp32/board_config.h`), at a few fps; on an M2 the model takes about 10–15 ms per frame, so the camera is the bottleneck.
 
 ## Next steps
 

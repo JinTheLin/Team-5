@@ -274,6 +274,18 @@ void voiceBegin(int speakerPin, int toneHz) {
                 VOICE_USE_AMP ? "MAX98357A amp" : "speaker pin (PDM)");
 }
 
+// Hands a sentence to the voice task. A newer one cuts off the one playing.
+static void queueSentence(const VoiceClip **clips, int count, const char *message) {
+  portENTER_CRITICAL(&requestLock);
+  for (int i = 0; i < count; i++) pendingClips[i] = clips[i];
+  pendingCount = count;
+  strlcpy(pendingText, message, sizeof(pendingText));
+  newRequest = true;
+  portEXIT_CRITICAL(&requestLock);
+
+  xTaskNotifyGive(voiceTask);
+}
+
 bool voiceSay(const char *message) {
   if (voiceTask == NULL || message == NULL) return false;
   const VoiceClip *clips[MAX_CLIPS];
@@ -285,15 +297,15 @@ bool voiceSay(const char *message) {
     count = buildSentence(message, clips);
   }
   if (count == 0) return false;
+  queueSentence(clips, count, message);
+  return true;
+}
 
-  portENTER_CRITICAL(&requestLock);
-  for (int i = 0; i < count; i++) pendingClips[i] = clips[i];
-  pendingCount = count;
-  strlcpy(pendingText, message, sizeof(pendingText));
-  newRequest = true;
-  portEXIT_CRITICAL(&requestLock);
-
-  xTaskNotifyGive(voiceTask);
+bool voiceSayClip(const char *clipName) {
+  if (voiceTask == NULL || clipName == NULL) return false;
+  const VoiceClip *clip = findClip(clipName);
+  if (clip == NULL) return false;
+  queueSentence(&clip, 1, clipName);
   return true;
 }
 

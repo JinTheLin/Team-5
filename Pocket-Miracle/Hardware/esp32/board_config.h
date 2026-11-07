@@ -31,4 +31,11 @@
 //#define CAMERA_MODEL_DFRobot_Romeo_ESP32S3 // Has PSRAM
 #include "camera_pins.h"
 
+// Smart Cane: the camera sits sideways on the cane, so every frame is turned
+// before it's sent (app_httpd.cpp). The app, laptop and browser all get the
+// turned picture.
+//   0 = no turn, 1 = 90° clockwise, 2 = 180°, 3 = 90° counter-clockwise
+// Our cane needs 3 (turn left). If the picture comes out upside down, try 1.
+#define CAMERA_ROTATION 3
+
 #endif  // BOARD_CONFIG_H

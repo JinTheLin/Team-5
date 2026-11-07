@@ -433,7 +433,7 @@ def main():
     ap.add_argument("--sonar-cm", type=float, default=None, help="pretend sonar distance (for webcam tests)")
     ap.add_argument("--say", action="store_true", help="speak warnings out loud on the laptop")
     ap.add_argument("--no-cane-voice", action="store_true", help="don't send warnings to the cane")
-    ap.add_argument("--imgsz", type=int, default=320, help="model input size (cane frames are 320x240)")
+    ap.add_argument("--imgsz", type=int, default=320, help="model input size (cane frames are 240x320, turned upright)")
     ap.add_argument("--device", default=None, help="mps, cpu, ... (default: mps if available)")
     ap.add_argument("--scale", type=float, default=2.0, help="window zoom (cane frames are tiny)")
     args = ap.parse_args()

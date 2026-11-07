@@ -54,6 +54,8 @@ PHRASES = {
     "cane_off": "cane off",
     "sonar_mode": "sonar mode",
     "camera_mode": "camera mode",
+    "speaker_muted": "speaker muted",      # double-tap the switch
+    "speaker_unmuted": "speaker unmuted",
 }
 for word in sorted(set(WATCH.values())):
     PHRASES[word] = word

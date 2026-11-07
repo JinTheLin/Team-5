@@ -109,7 +109,7 @@ button:focus-visible, input:focus-visible { outline: 3px solid rgba(105,102,182,
 .delivery-card{display:flex;align-items:center;gap:11px}.delivery-icon{width:40px;height:40px;display:grid;place-items:center;color:white;border-radius:50%;background:var(--green)}.delivery-card span:last-child{flex:1}.delivery-card strong,.delivery-card small,.delivery-card em{display:block}.delivery-card strong{font-size:12px}.delivery-card small{margin-top:3px;color:var(--muted);font-size:9px}.delivery-card em{margin-top:6px;color:var(--green);font-size:8px;font-style:normal}.delivery-card em i{display:inline-block;width:6px;height:6px;margin-right:4px;border-radius:50%;background:var(--green)}
 .camera-view { height:430px; position:relative; overflow:hidden; border-radius:28px; background:#e6e5ec; box-shadow:0 18px 36px rgba(37,34,76,.15); }
 .camera-view>img{filter:saturate(.85) contrast(.95)}
-/* The cane camera sends small landscape frames; show the whole frame instead of cropping it. */
+/* The cane camera sends small upright frames (turned on the cane); show the whole frame instead of cropping it. */
 .camera-view.camera-live{background:#15141c}.camera-view.camera-live>img{object-fit:contain;filter:none}
 .camera-paused>img{display:none}
 .camera-mini-empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;gap:7px;color:var(--muted);background:linear-gradient(145deg,#eeeefa,#f6f5fa);font-size:10px;font-weight:650}

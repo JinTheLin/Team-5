@@ -29,6 +29,10 @@ void voiceBegin(int speakerPin, int toneHz);
 // Returns false if there's nothing to say (empty message).
 bool voiceSay(const char *message);
 
+// Say one recorded phrase by its clip name, e.g. "speaker_muted".
+// Returns false if that clip isn't in src/voice_clips.cpp (re-run make_clips.py).
+bool voiceSayClip(const char *clipName);
+
 // Stop talking and wait (up to 1 s) until the speaker is free again.
 void voiceStop();
 

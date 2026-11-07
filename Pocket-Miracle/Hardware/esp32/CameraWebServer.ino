@@ -36,10 +36,19 @@
     Hold the limit switch 2 seconds -> turns ON  (rising chime).
     Hold the limit switch 2 seconds -> turns OFF (falling chime).
 
+  Mute (while the cane is on):
+    Tap the limit switch twice fast -> "Speaker muted" (beeps stop).
+    Tap twice fast again            -> "Speaker unmuted".
+    The sonar keeps measuring while muted, so camera warnings still work.
+    The solid "very close" tone still plays (see MUTE_KEEPS_DANGER_TONE).
+    Turning the cane off and on again always unmutes it.
+
   Camera:
     Starts at boot. Connects to WiFi in the background.
     The cane works even if WiFi never connects.
     When connected, Serial Monitor prints the stream address.
+    The camera is mounted sideways, so every frame is turned 90° to the left
+    (counter-clockwise) before it's sent (CAMERA_ROTATION in board_config.h).
 
   Wiring:
     HC-SR04 TRIG -> GPIO21
@@ -77,7 +86,7 @@
 #define SWITCH_PIN  42
 
 // ---------- Tuning (change these to adjust the feel) ----------
-const float ALERT_START_CM = 150.0;  // farther than this = silent
+const float ALERT_START_CM = 120.0;  // farther than this = silent (was 150)
 const float DANGER_CM      = 30.0;   // closer than this = solid tone
 
 const int TONE_HZ        = 2000;     // beep pitch (small speakers are loudest around 2-3 kHz)
@@ -92,6 +101,11 @@ const unsigned long PING_INTERVAL_MS = 60;    // HC-SR04 needs ~60 ms between pi
 const unsigned long ECHO_TIMEOUT_US  = 25000; // ~4 m; no echo after this = nothing there
 
 const unsigned long HOLD_TO_TOGGLE_MS = 2000; // how long to hold the switch to turn on/off
+
+const unsigned long DEBOUNCE_MS   = 30;   // ignore switch chatter shorter than this
+const unsigned long TAP_MAX_MS    = 400;  // a press shorter than this counts as a tap
+const unsigned long DOUBLE_TAP_MS = 600;  // 2nd tap must end within this after the 1st
+const bool MUTE_KEEPS_DANGER_TONE = true; // true = solid tone under DANGER_CM even when muted
 // ---------------------------------------------------------------
 
 const float NO_ECHO = 999.0;
@@ -104,10 +118,16 @@ unsigned long lastPingTime = 0;
 bool beepOn = false;
 unsigned long beepStateStart = 0;
 
-// ----- Power state -----
+// ----- Power / switch state -----
 bool caneActive = false;          // false = sleep mode, true = running
-unsigned long pressStart = 0;     // when the current hold began (0 = not pressed)
-bool waitForRelease = false;      // after a toggle, ignore the switch until it's let go
+bool beepMuted = false;           // true = sonar beeps off (double-tap toggles)
+bool switchRaw = false;           // last raw reading (true = pressed)
+unsigned long switchRawChange = 0;// when the raw reading last changed
+bool switchDown = false;          // debounced: switch is pressed
+unsigned long pressStart = 0;     // when the current press began
+bool holdHandled = false;         // this press already turned the cane on/off
+int tapCount = 0;                 // quick taps so far (0 or 1)
+unsigned long firstTapTime = 0;   // when the first tap ended
 
 // ----- Camera / WiFi state -----
 camera_config_t config;
@@ -244,6 +264,7 @@ void playPowerOffChime() { playNote(2400, 120); playNote(1800, 120); playNote(12
 
 void turnOn() {
   caneActive = true;
+  beepMuted = false;              // always start with the beeper on
   // Start fresh so old readings don't cause a beep right away
   history[0] = history[1] = history[2] = NO_ECHO;
   distanceCm = NO_ECHO;
@@ -262,23 +283,58 @@ void turnOff() {
   Serial.println(">>> Cane OFF (sleep mode)");
 }
 
-// Watches the switch. A continuous 2-second hold flips the cane on/off.
+// Double-tap: beeps off/on. The voice says which, so a blind user knows.
+void toggleMute() {
+  beepMuted = !beepMuted;
+  if (beepMuted) {
+    speakerOff();
+    beepOn = false;
+  }
+  const char *clip = beepMuted ? "speaker_muted" : "speaker_unmuted";
+  if (!voiceSayClip(clip)) {
+    // No voice clip (make_clips.py not re-run): two low notes = muted, two high = unmuted
+    if (beepMuted) { playNote(1200, 100); playNote(800, 150); }
+    else           { playNote(1800, 100); playNote(2400, 150); }
+  }
+  Serial.println(beepMuted ? ">>> Speaker muted" : ">>> Speaker unmuted");
+}
+
+// Watches the switch.
+//   Hold 2 s           -> cane on/off
+//   Two quick taps     -> mute/unmute the beeps (only while the cane is on)
 void checkPowerSwitch() {
-  bool pressed = (digitalRead(SWITCH_PIN) == LOW);
   unsigned long now = millis();
 
-  if (!pressed) {
-    pressStart = 0;          // let go: reset the hold timer
-    waitForRelease = false;  // ready for the next hold
-    return;
+  // Debounce: a limit switch chatters for a few ms, which could look like two taps
+  bool raw = (digitalRead(SWITCH_PIN) == LOW);
+  if (raw != switchRaw) {
+    switchRaw = raw;
+    switchRawChange = now;
+  }
+  bool pressed = (now - switchRawChange >= DEBOUNCE_MS) ? switchRaw : switchDown;
+
+  if (pressed && !switchDown) {          // just pressed
+    switchDown = true;
+    pressStart = now;
+    holdHandled = false;
+  } else if (!pressed && switchDown) {   // just let go
+    switchDown = false;
+    bool wasTap = !holdHandled && (now - pressStart < TAP_MAX_MS);
+    if (!wasTap) {
+      tapCount = 0;                      // a long press cancels any double-tap
+    } else if (tapCount == 1 && now - firstTapTime <= DOUBLE_TAP_MS) {
+      tapCount = 0;
+      if (caneActive) toggleMute();
+    } else {
+      tapCount = 1;                      // first tap: wait for the second
+      firstTapTime = now;
+    }
   }
 
-  if (waitForRelease) return;   // already toggled on this hold; wait for release
-
-  if (pressStart == 0) {
-    pressStart = now;            // hold just started
-  } else if (now - pressStart >= HOLD_TO_TOGGLE_MS) {
-    waitForRelease = true;       // only toggle once per hold
+  // Held long enough -> turn on/off (once per hold)
+  if (switchDown && !holdHandled && now - pressStart >= HOLD_TO_TOGGLE_MS) {
+    holdHandled = true;
+    tapCount = 0;
     if (caneActive) turnOff();
     else            turnOn();
   }
@@ -308,6 +364,14 @@ void runCane() {
   if (voiceSpeaking()) {
     beepOn = false;
     beepStateStart = millis();
+    return;
+  }
+
+  // Muted -> no beeps (the sonar above keeps measuring for camera warnings)
+  bool dangerClose = (distanceCm <= DANGER_CM);
+  if (beepMuted && !(MUTE_KEEPS_DANGER_TONE && dangerClose)) {
+    speakerOff();
+    beepOn = false;
     return;
   }
 
