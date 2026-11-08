@@ -116,7 +116,7 @@ function callEmergencyContact(phone: string | null) {
   window.location.href = `tel:${phone}`;
 }
 
-function Home({ setTab, openSettings, caretaker }: { setTab: (tab: Tab) => void; openSettings: () => void; caretaker: boolean }) {
+function Home({ setTab, openSettings, caretaker }: { setTab: (tab: Tab) => void; openSettings: (view?: "main" | "emergency") => void; caretaker: boolean }) {
   const { displayName, settings } = useAccount();
   const [emergencyOpen, setEmergencyOpen] = useState(false);
   const contactName = settings?.emergency_contact_name;
@@ -147,11 +147,7 @@ function Home({ setTab, openSettings, caretaker }: { setTab: (tab: Tab) => void;
           </div>
         </Button>
       </div>
-      <div className="fall-card">
-        <span className="fall-icon"><Icon name="shield" size={21} /></span>
-        <span><strong>Fall detection</strong><small>Not connected yet</small></span>
-      </div>
-      <Button className="help-button" onClick={() => setEmergencyOpen(true)}><Icon name="alert" size={22} />Emergency help</Button>
+      <Button className="help-button" onClick={() => contactPhone ? setEmergencyOpen(true) : openSettings("emergency")}><Icon name="alert" size={22} />Emergency help</Button>
       <MotionPresence open={emergencyOpen} className="home-emergency-layer" onClose={() => setEmergencyOpen(false)}>
         <div className="emergency-dialog" role="dialog" aria-modal="true" aria-label="Emergency assistance">
           <Button className="emergency-scrim" onClick={() => setEmergencyOpen(false)} aria-label="Close emergency assistance" />
@@ -162,7 +158,7 @@ function Home({ setTab, openSettings, caretaker }: { setTab: (tab: Tab) => void;
               <Button className="tiny-close" onClick={() => setEmergencyOpen(false)} aria-label="Close"><Icon name="close" size={18} /></Button>
             </div>
             <div className="sos-summary"><span className="sos-summary-icon"><Icon name="person" size={21} /></span><span><strong>{contactName || "Trusted contact"}</strong><small>{contactPhone || "Not set up"}</small></span></div>
-            {contactPhone ? <Button className="send-button home-send" onClick={() => callEmergencyContact(contactPhone)}><Icon name="alert" size={18} />Open phone dialer</Button> : <Button className="send-button home-send" onClick={() => { setEmergencyOpen(false); openSettings(); }}><Icon name="settings" size={18} />Set emergency contact</Button>}
+            {contactPhone ? <Button className="send-button home-send" onClick={() => callEmergencyContact(contactPhone)}><Icon name="alert" size={18} />Open phone dialer</Button> : <Button className="send-button home-send" onClick={() => { setEmergencyOpen(false); openSettings("emergency"); }}><Icon name="settings" size={18} />Set emergency contact</Button>}
           </div>
         </div>
       </MotionPresence>
@@ -170,7 +166,7 @@ function Home({ setTab, openSettings, caretaker }: { setTab: (tab: Tab) => void;
   );
 }
 
-function Safety({ caretaker, openSettings }: { caretaker: boolean; openSettings: () => void }) {
+function Safety({ caretaker, openSettings }: { caretaker: boolean; openSettings: (view?: "main" | "emergency") => void }) {
   const { settings } = useAccount();
   const [showHelp, setShowHelp] = useState(false);
   const contactName = settings?.emergency_contact_name;
@@ -186,11 +182,11 @@ function Safety({ caretaker, openSettings }: { caretaker: boolean; openSettings:
         <div><span className="safety-icon"><Icon name="shield" size={20} /></span><span><strong>Fall monitoring</strong><small>Not connected</small></span></div>
         <div><span className="safety-icon"><Icon name="person" size={20} /></span><span><strong>Trusted contact</strong><small>{contactPhone ? `${contactName || "Contact"} · ${contactPhone}` : "Not set up"}</small></span></div>
       </div>
-      {!showHelp && <Button className="assist-button" onClick={() => setShowHelp(true)}><Icon name="alert" size={20} />SOS Emergency Assistance</Button>}
+      {!showHelp && <Button className="assist-button" onClick={() => contactPhone ? setShowHelp(true) : openSettings("emergency")}><Icon name="alert" size={20} />SOS Emergency Assistance</Button>}
       {showHelp && (
         <div className="emergency-panel">
           <div className="panel-top"><div><div className="panel-title">Call your trusted contact</div><div className="panel-subtitle">{contactPhone ? `Open your phone's dialer for ${contactName || "your contact"}. Calling may require confirmation.` : "No emergency contact is saved. Add one in Settings first."}</div></div><Button className="tiny-close" onClick={() => setShowHelp(false)} aria-label="Close"><Icon name="close" size={18} /></Button></div>
-          {contactPhone ? <Button className="send-button" onClick={() => callEmergencyContact(contactPhone)}><Icon name="alert" size={18} />Open phone dialer</Button> : <Button className="send-button" onClick={() => { setShowHelp(false); openSettings(); }}><Icon name="settings" size={18} />Set emergency contact</Button>}
+          {contactPhone ? <Button className="send-button" onClick={() => callEmergencyContact(contactPhone)}><Icon name="alert" size={18} />Open phone dialer</Button> : <Button className="send-button" onClick={() => { setShowHelp(false); openSettings("emergency"); }}><Icon name="settings" size={18} />Set emergency contact</Button>}
         </div>
       )}
     </div>
@@ -212,7 +208,7 @@ function SettingRow({ icon, title, detail, children, onClick }: { icon: IconName
 
 type Preferences = { voice: boolean; reconnect: boolean; location: boolean; paired: boolean; volume: number; largeText: boolean; reduceMotion: boolean };
 
-function SettingsSheet({ close, caretaker, setCaretaker, preferences, setPreferences }: { close: () => void; caretaker: boolean; setCaretaker: (value: boolean) => void; preferences: Preferences; setPreferences: (value: Preferences) => void }) {
+function SettingsSheet({ close, caretaker, setCaretaker, preferences, setPreferences, initialView = "main" }: { close: () => void; caretaker: boolean; setCaretaker: (value: boolean) => void; preferences: Preferences; setPreferences: (value: Preferences) => void; initialView?: "main" | "emergency" }) {
   const account = useAccount();
   const { session } = useAuth();
   const { command } = useVision();
@@ -253,7 +249,7 @@ function SettingsSheet({ close, caretaker, setCaretaker, preferences, setPrefere
   const setReconnect = (reconnect: boolean) => setPreferences({ ...preferences, reconnect });
   const setLocation = (location: boolean) => setPreferences({ ...preferences, location });
   const setPaired = (paired: boolean) => setPreferences({ ...preferences, paired });
-  const [view, setView] = useState<"main" | "connection" | "caretaker" | "accessibility" | "emergency">("main");
+  const [view, setView] = useState<"main" | "connection" | "caretaker" | "accessibility" | "emergency">(initialView);
 
 
   return (
@@ -343,6 +339,11 @@ export default function App() {
     setActiveTab(next);
   }
   const [settings, setSettings] = useState(false);
+  const [settingsView, setSettingsView] = useState<"main" | "emergency">("main");
+  function openSettings(view: "main" | "emergency" = "main") {
+    setSettingsView(view);
+    setSettings(true);
+  }
   const [caretaker, setCaretaker] = useState(false);
   const [previewPreferences, setPreviewPreferences] = useState({ location: false, paired: false });
   const saved = account.settings!;
@@ -355,8 +356,8 @@ export default function App() {
     <main className="app-shell">
       <div className={`phone${preferences.largeText ? " large-text" : ""}${preferences.reduceMotion ? " reduce-motion" : ""}`}>
         <div className="viewport" data-tab={tab} style={{ "--screen-offset": `${direction * 14}px` } as CSSProperties} inert={settings}>
-          {tab === "home" && <Home setTab={setTab} openSettings={() => setSettings(true)} caretaker={caretaker} />}
-          {tab === "safety" && <Safety caretaker={caretaker} openSettings={() => setSettings(true)} />}
+          {tab === "home" && <Home setTab={setTab} openSettings={openSettings} caretaker={caretaker} />}
+          {tab === "safety" && <Safety caretaker={caretaker} openSettings={openSettings} />}
           {tab === "camera" && <VisionCamera caretaker={caretaker} />}
           {tab === "history" && <History startCamera={() => setTab("camera")} />}
         </div>
@@ -364,7 +365,7 @@ export default function App() {
           <span className="tab-indicator" aria-hidden="true" style={{ transform: `translateX(${tabs.findIndex(item => item.id === tab) * 100}%)` }} />
           {tabs.map((item) => <Button key={item.id} className={`tab ${tab === item.id ? "active" : ""}`} onClick={() => setTab(item.id)} aria-current={tab === item.id ? "page" : undefined}><Icon name={item.id} size={22} /><span>{item.label}</span></Button>)}
         </nav>
-        <MotionPresence open={settings} className="settings-presence" onClose={() => setSettings(false)}><SettingsSheet preferences={preferences} setPreferences={setPreferences} close={() => setSettings(false)} caretaker={caretaker} setCaretaker={setCaretaker} /></MotionPresence>
+        <MotionPresence open={settings} className="settings-presence" onClose={() => setSettings(false)}><SettingsSheet key={settingsView} initialView={settingsView} preferences={preferences} setPreferences={setPreferences} close={() => setSettings(false)} caretaker={caretaker} setCaretaker={setCaretaker} /></MotionPresence>
       </div>
     </main>
   );
