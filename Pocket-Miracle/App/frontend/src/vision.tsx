@@ -62,6 +62,20 @@ export function VisionProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  // Say each new warning on this laptop too, since the cane's speaker is quiet.
+  // Uses the browser's built-in voice and follows the "Voice announcements" setting.
+  const voiceOn = account.settings?.voice_enabled ?? false;
+  const warning = status?.last_warning;
+  const spokenAt = useRef<number | null>(null);
+  useEffect(() => {
+    if (!warning || warning.at === spokenAt.current) return;
+    spokenAt.current = warning.at;
+    const fresh = Date.now() / 1000 - warning.at < 5;  // don't replay an old warning after a page reload
+    if (!voiceOn || !fresh || !("speechSynthesis" in window)) return;
+    window.speechSynthesis.cancel();  // a newer warning cuts off an older one, like on the cane
+    window.speechSynthesis.speak(new SpeechSynthesisUtterance(warning.message));
+  }, [warning, voiceOn]);
+
   async function command(action: "start" | "stop" | "disconnect", config?: Config) {
     revision.current += 1;
     setBusy(true); setError("");
