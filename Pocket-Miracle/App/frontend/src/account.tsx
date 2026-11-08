@@ -34,7 +34,7 @@ export function useAuth() {
   return value;
 }
 
-export type Settings = { voice_enabled: boolean; volume: number; large_text: boolean; reduce_motion: boolean; automatic_reconnect: boolean; warning_distance_cm: number; warning_confidence: number };
+export type Settings = { voice_enabled: boolean; volume: number; large_text: boolean; reduce_motion: boolean; automatic_reconnect: boolean; warning_distance_cm: number; warning_confidence: number; emergency_contact_name: string | null; emergency_contact_phone: string | null };
 type AccountState = { settings: Settings | null; loading: boolean; error: string; saving: boolean; displayName: string; updateSettings: (next: Partial<Settings>) => void; retry: () => void; flush: () => Promise<void> };
 const AccountContext = createContext<AccountState | null>(null);
 export function AccountProvider({ children }: { children: ReactNode }) {
@@ -114,7 +114,7 @@ export function AccountProvider({ children }: { children: ReactNode }) {
     retry: () => { if (settings) void flush().catch(() => {}); else setReload(value => value + 1); }, flush }}>{children}</AccountContext.Provider>;
 }
 function pickSettings(row: Settings): Settings {
-  return { voice_enabled: row.voice_enabled, volume: row.volume, large_text: row.large_text, reduce_motion: row.reduce_motion, automatic_reconnect: row.automatic_reconnect, warning_distance_cm: Number(row.warning_distance_cm), warning_confidence: Number(row.warning_confidence) };
+  return { voice_enabled: row.voice_enabled, volume: row.volume, large_text: row.large_text, reduce_motion: row.reduce_motion, automatic_reconnect: row.automatic_reconnect, warning_distance_cm: Number(row.warning_distance_cm), warning_confidence: Number(row.warning_confidence), emergency_contact_name: row.emergency_contact_name ?? null, emergency_contact_phone: row.emergency_contact_phone ?? null };
 }
 export function useAccount() {
   const value = useContext(AccountContext);
