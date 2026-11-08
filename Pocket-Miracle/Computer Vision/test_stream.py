@@ -278,9 +278,10 @@ def make_sonar(args):
 #  On the phone this will be the same request (or Bluetooth).
 # ---------------------------------------------------------------------------
 class CaneVoice(threading.Thread):
-    def __init__(self, base_url):
+    def __init__(self, base_url, on_delivery=None):
         super().__init__(daemon=True)
         self.base_url = base_url
+        self.on_delivery = on_delivery
         self._lock = threading.Lock()
         self._pending = None
         self._wake = threading.Event()
@@ -290,8 +291,18 @@ class CaneVoice(threading.Thread):
 
     def send(self, alert):
         with self._lock:
+            previous = self._pending
             self._pending = alert  # a newer warning replaces one not sent yet
+        if previous is not None:
+            self._report(previous, "cancelled", "Replaced by a newer warning before transmission.")
         self._wake.set()
+
+    def _report(self, alert, status, error=None):
+        if self.on_delivery:
+            try:
+                self.on_delivery(alert, status, error)
+            except Exception as failure:
+                print(f"Could not record warning delivery: {type(failure).__name__}")
 
     def take_failed(self):
         """Words whose warning didn't get through (so they can be sent again)."""
@@ -303,17 +314,22 @@ class CaneVoice(threading.Thread):
         while not self._stop_event.is_set():
             self._wake.wait(0.5)
             self._wake.clear()
+            if self._stop_event.is_set():
+                break
             with self._lock:
                 alert, self._pending = self._pending, None
             if alert is None:
                 continue
             url = f"{self.base_url}/warn?msg={urllib.parse.quote(alert.message, safe=',.')}"
             delivered = False
+            accepted = False
+            self._report(alert, "sending")
             try:
                 with urllib.request.urlopen(url, timeout=2.0) as resp:
                     reply = resp.read().decode(errors="replace").strip()
                 self.status = f"Cane voice: {reply}"
                 delivered = reply == "ok"  # e.g. "ignored: cane is off" = not said
+                accepted = delivered
             except urllib.error.HTTPError as e:
                 if e.code == 404:
                     self.status = "Cane voice: cane has no /warn yet (upload the new sketch)"
@@ -326,10 +342,15 @@ class CaneVoice(threading.Thread):
                 with self._lock:
                     self._failed.append(alert.word)
                 self.status += " - will resend"
+            self._report(alert, "acknowledged" if accepted else "failed", None if accepted else self.status)
             print(f"   {self.status}")
 
     def stop(self):
         self._stop_event.set()
+        with self._lock:
+            pending, self._pending = self._pending, None
+        if pending is not None:
+            self._report(pending, "cancelled", "Detection stopped before transmission.")
         self._wake.set()
 
 

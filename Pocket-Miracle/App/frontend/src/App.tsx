@@ -1,20 +1,18 @@
-import { useEffect, useRef, useState, type ButtonHTMLAttributes, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type ReactNode } from "react";
+import VisionCamera from "./VisionCamera";
+import { VisionImage, useVision } from "./vision";
+import { useAccount, useAuth } from "./account";
+import { supabase } from "./supabase";
+import History from "./History";
 
-// The cane's ESP32 camera. If the cane gets a different address on the hotspot,
-// set VITE_CANE_IP in App/frontend/.env.local (e.g. VITE_CANE_IP=172.20.10.5) and restart the dev server.
-const CANE_IP = import.meta.env.VITE_CANE_IP || "172.20.10.3";
-const CANE_STREAM_URL = `http://${CANE_IP}:81/stream`;
-const CANE_RETRY_MS = 4000;
-
-type StreamStatus = "connecting" | "live" | "offline";
-
-type Tab = "home" | "safety" | "camera";
+type Tab = "home" | "safety" | "camera" | "history";
 type IconName =
   | Tab | "settings" | "battery" | "vision" | "location" | "shield"
   | "help" | "close" | "chevron" | "bluetooth" | "wifi" | "volume"
   | "accessibility" | "person" | "check" | "cameraOff" | "alert" | "send";
 
 const paths: Record<IconName, ReactNode> = {
+  history: <><path d="M3 11a9 9 0 1 1 2.6 7"/><path d="M3 4v7h7"/><path d="M12 7v5l3 2"/></>,
   home: <><path d="m3 11 9-8 9 8"/><path d="M5.5 9.5V21h13V9.5"/><path d="M9.5 21v-7h5v7"/></>,
   safety: <><path d="M12 22s8-3.5 8-10V5l-8-3-8 3v7c0 6.5 8 10 8 10Z"/><path d="m9 12 2 2 4-5"/></>,
   camera: <><path d="M14.5 6 13 4H8L6.5 6H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-5.5Z"/><circle cx="10.5" cy="13" r="4"/></>,
@@ -45,6 +43,38 @@ function Button({ children, className = "", ...props }: ButtonHTMLAttributes<HTM
   return <button className={className} {...props}>{children}</button>;
 }
 
+// Retain sheets briefly on dismissal so their exit can finish. Reopening cancels it.
+function MotionPresence({ open, className, children, onClose }: { open: boolean; className: string; children: ReactNode; onClose?: () => void }) {
+  const [mounted, setMounted] = useState(open);
+  const element = useRef<HTMLDivElement>(null);
+  const close = useRef(onClose);
+  close.current = onClose;
+  useEffect(() => {
+    if (!open) return;
+    const previous = document.activeElement as HTMLElement | null;
+    const frame = requestAnimationFrame(() => element.current?.querySelector<HTMLElement>(".tiny-close, .close-sos, button:not(.scrim):not(.emergency-scrim)")?.focus({ preventScroll: true }));
+    function keyboard(event: KeyboardEvent) {
+      if (event.key === "Escape") { event.preventDefault(); close.current?.(); }
+      if (event.key !== "Tab") return;
+      const controls = Array.from(element.current?.querySelectorAll<HTMLElement>("button:not(:disabled),input:not(:disabled),a[href],[tabindex='0']") || []).filter(node => node.getClientRects().length && !node.closest("[inert]"));
+      const first = controls[0], last = controls.at(-1);
+      if (!first || !last) return;
+      if (event.shiftKey && (document.activeElement === first || !element.current?.contains(document.activeElement))) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && (document.activeElement === last || !element.current?.contains(document.activeElement))) { event.preventDefault(); first.focus(); }
+    }
+    document.addEventListener("keydown", keyboard);
+    return () => { cancelAnimationFrame(frame); document.removeEventListener("keydown", keyboard); if (previous?.isConnected) previous.focus({ preventScroll: true }); };
+  }, [open]);
+  useEffect(() => {
+    if (open) { setMounted(true); return; }
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches || element.current?.closest(".reduce-motion");
+    const timer = window.setTimeout(() => setMounted(false), reduced ? 0 : 220);
+    return () => window.clearTimeout(timer);
+  }, [open]);
+  if (!open && !mounted) return null;
+  return <div ref={element} className={`${className}${open ? "" : " is-exiting"}`} inert={!open} aria-hidden={!open || undefined}>{children}</div>;
+}
+
 function Switch({ on, setOn, label }: { on: boolean; setOn: (value: boolean) => void; label: string }) {
   return <Button className={`switch ${on ? "on" : ""}`} role="switch" aria-checked={on} aria-label={label} onClick={() => setOn(!on)}><span /></Button>;
 }
@@ -62,6 +92,7 @@ function MiniMap({ large = false }: { large?: boolean }) {
 }
 
 function DeviceCard() {
+  const { status, connected } = useVision();
   return (
     <div className="device-card">
       <div className="orb">
@@ -69,11 +100,11 @@ function DeviceCard() {
         <span className="cane"><i /><b /></span>
       </div>
       <div className="device-content">
-        <div className="connected"><span /> CANE CONNECTED</div>
-        <div className="device-title">Ready for your day</div>
+        <div className="connected">YOUR SMART CANE</div>
+        <div className="device-title">A little more independence.</div>
         <div className="device-stats">
-          <div><Icon name="battery" size={19} /><span><strong>84%</strong> battery</span></div>
-          <div><Icon name="vision" size={19} /><span><strong>Active</strong> detection</span></div>
+          <div><Icon name="battery" size={19} /><span><strong>Unavailable</strong> battery status</span></div>
+          <div><Icon name="vision" size={19} /><span><strong>{connected && status?.phase === "live" ? "Running on laptop" : "Not running"}</strong> detection</span></div>
         </div>
       </div>
     </div>
@@ -81,29 +112,30 @@ function DeviceCard() {
 }
 
 function Home({ setTab, openSettings, caretaker }: { setTab: (tab: Tab) => void; openSettings: () => void; caretaker: boolean }) {
+  const { displayName } = useAccount();
   const [emergencyOpen, setEmergencyOpen] = useState(false);
   const [sent, setSent] = useState(false);
 
   return (
     <div className="screen home-screen">
       <header className="hello">
-        <div><div className="overline">{caretaker ? "CARETAKER VIEW" : "GOOD MORNING"}</div><div className="title">{caretaker ? "Alex is doing well." : "Your journey, simplified."}</div></div>
+        <div><div className="overline">{caretaker ? "CARETAKER PREVIEW" : `HELLO, ${displayName}`}</div><div className="title">{caretaker ? "Stay in touch." : "Your everyday companion."}</div></div>
         <Button className="round-button" onClick={openSettings} aria-label="Open settings"><Icon name="settings" size={21} /></Button>
       </header>
       {caretaker ? (
         <div className="caretaker-hero">
-          <div className="caretaker-top"><span className="person-avatar">A</span><div><div className="device-title">Alex’s Smart Cane</div><div className="soft-status"><span /> Connected · 84% battery</div></div></div>
-          <div className="caretaker-clear"><Icon name="shield" size={27} /><div><strong>No active alerts</strong><span>Fall monitoring is on</span></div></div>
+          <div className="caretaker-top"><span className="person-avatar">A</span><div><div className="device-title">Alex’s Smart Cane</div><div className="soft-status">Example caretaker view</div></div></div>
+          <div className="caretaker-clear"><Icon name="shield" size={27} /><div><strong>Monitoring not connected</strong><span>Alerts will appear here once set up.</span></div></div>
         </div>
       ) : <DeviceCard />}
-
+      <div className="home-section-heading"><span>YOUR DAY, AT A GLANCE</span><span className="section-rule" /></div>
       <div className="feature-grid">
         <Button className="feature-card" onClick={() => setTab("safety")}>
-          <div className="feature-heading"><span className="feature-icon lavender"><Icon name="location" size={19} /></span><span><strong>Live Location</strong><small>Sharing with Maya</small></span><Icon name="chevron" size={18} /></div>
-          <MiniMap />
+          <div className="feature-heading"><span className="feature-icon lavender"><Icon name="location" size={19} /></span><span><strong>Safety</strong><small>Contacts & location</small></span><Icon name="chevron" size={18} /></div>
+          <div className="feature-description">Stay connected to someone you trust.</div>
         </Button>
         <Button className="feature-card" onClick={() => setTab("camera")}>
-          <div className="feature-heading"><span className="feature-icon blue"><Icon name="camera" size={19} /></span><span><strong>{caretaker ? "Request Camera" : "Live Camera"}</strong><small>{caretaker ? "Approval required" : "Detection active"}</small></span><Icon name="chevron" size={18} /></div>
+          <div className="feature-heading"><span className="feature-icon blue"><Icon name="camera" size={19} /></span><span><strong>{caretaker ? "Camera" : "Cane camera"}</strong><small>{caretaker ? "Approval required" : "View surroundings"}</small></span><Icon name="chevron" size={18} /></div>
           <div className="camera-mini">
             {caretaker ? <div className="camera-mini-empty"><Icon name="cameraOff" size={17} />Camera is private</div> : <CanePreview />}
           </div>
@@ -112,33 +144,31 @@ function Home({ setTab, openSettings, caretaker }: { setTab: (tab: Tab) => void;
 
       <div className="fall-card">
         <span className="fall-icon"><Icon name="shield" size={21} /></span>
-        <span><strong>Fall detection</strong><small>Simulated · Monitoring normally</small></span>
-        <span className="status-check"><Icon name="check" size={16} /></span>
+        <span><strong>Fall detection</strong><small>Not connected yet</small></span>
       </div>
 
-      <Button className="help-button" onClick={() => { setEmergencyOpen(true); setSent(false); }}><Icon name="alert" size={22} />SOS Emergency Assistance</Button>
-      {emergencyOpen && (
-        <div className="home-emergency-layer" role="dialog" aria-modal="true" aria-label="Emergency assistance">
+      <Button className="help-button" onClick={() => { setEmergencyOpen(true); setSent(false); }}><Icon name="alert" size={22} />Emergency help</Button>
+      <MotionPresence open={emergencyOpen} className="home-emergency-layer" onClose={() => setEmergencyOpen(false)}>
+        <div className="emergency-dialog" role="dialog" aria-modal="true" aria-label="Emergency assistance">
           <Button className="emergency-scrim" onClick={() => setEmergencyOpen(false)} aria-label="Close emergency assistance" />
           <div className="home-emergency-sheet">
             {!sent ? <>
               <div className="emergency-grabber" />
               <div className="panel-top">
-                <div><div className="emergency-kicker">SOS EMERGENCY ASSISTANCE</div><div className="emergency-title">Send an SOS alert?</div><div className="panel-subtitle">Maya will be notified immediately with your shared location.</div></div>
+                <div><div className="emergency-kicker">EMERGENCY HELP · PREVIEW</div><div className="emergency-title">Try an SOS alert</div><div className="panel-subtitle">Emergency contacts are not connected. This preview will not send a message.</div></div>
                 <Button className="tiny-close" onClick={() => setEmergencyOpen(false)} aria-label="Close"><Icon name="close" size={18} /></Button>
               </div>
-              <div className="sos-summary"><span className="sos-summary-icon"><Icon name="location" size={21} /></span><span><strong>Your location will be shared</strong><small>Willow Park · updated just now</small></span></div>
-              <Button className="send-button home-send" onClick={() => setSent(true)}><Icon name="send" size={18} />Send SOS to Maya</Button>
+              <div className="sos-summary"><span className="sos-summary-icon"><Icon name="location" size={21} /></span><span><strong>Location unavailable</strong><small>Connect location and a trusted contact first.</small></span></div>
+              <Button className="send-button home-send" onClick={() => setSent(true)}><Icon name="send" size={18} />Preview SOS</Button>
             </> : <div className="home-delivered" role="status">
               <span className="delivery-icon"><Icon name="check" size={24} /></span>
-              <div className="emergency-title">SOS delivered</div>
-              <div className="delivered-copy">Maya received your emergency alert and shared location.</div>
-              <div className="delivery-status"><i /> Delivered just now</div>
+              <div className="emergency-title">Preview complete</div>
+              <div className="delivered-copy">No alert was sent. Once connected, your contact can receive your request for help.</div>
               <Button className="sheet-primary" onClick={() => setEmergencyOpen(false)}>Done</Button>
             </div>}
           </div>
         </div>
-      )}
+      </MotionPresence>
     </div>
   );
 }
@@ -154,149 +184,37 @@ function Safety({ caretaker }: { caretaker: boolean }) {
 
   return (
     <div className="screen">
-      <header className="page-header"><div><div className="overline">SAFETY</div><div className="page-title">{caretaker ? "Alex’s location" : "You’re looked after."}</div></div><span className="live-pill"><i /> LIVE</span></header>
+      <header className="page-header"><div><div className="overline">SAFETY</div><div className="page-title">{caretaker ? "Shared safety" : "Your support circle."}</div></div></header>
       <div className="safety-map-wrap">
-        <MiniMap large />
-        <div className="map-glass">
-          <span className="map-avatar">A</span>
-          <span><strong>{caretaker ? "Alex is at Willow Park" : "Location is being shared"}</strong><small>Updated just now · 0.8 mi away</small></span>
-        </div>
+        <div className="location-empty"><Icon name="location" size={32} /><h2>Location isn’t connected</h2><p>Your shared location will appear here after location sharing is set up.</p></div>
       </div>
       <div className="safety-row">
-        <div><span className="safety-icon"><Icon name="shield" size={20} /></span><span><strong>Fall monitoring</strong><small>Simulated · Active</small></span></div>
-        <div><span className="safety-icon"><Icon name="person" size={20} /></span><span><strong>Maya connected</strong><small>Trusted caretaker</small></span></div>
+        <div><span className="safety-icon"><Icon name="shield" size={20} /></span><span><strong>Fall monitoring</strong><small>Not connected</small></span></div>
+        <div><span className="safety-icon"><Icon name="person" size={20} /></span><span><strong>Trusted contact</strong><small>Not set up</small></span></div>
       </div>
       {!showHelp && !sent && <Button className="assist-button" onClick={() => setShowHelp(true)}><Icon name="alert" size={20} />SOS Emergency Assistance</Button>}
       {showHelp && !sent && (
         <div className="emergency-panel">
-          <div className="panel-top"><div><div className="panel-title">Send an SOS alert?</div><div className="panel-subtitle">Maya will be notified immediately with your live location.</div></div><Button className="tiny-close" onClick={() => setShowHelp(false)} aria-label="Close"><Icon name="close" size={18} /></Button></div>
-          <Button className="send-button" onClick={sendAlert}><Icon name="send" size={18} />Send SOS to Maya</Button>
+          <div className="panel-top"><div><div className="panel-title">Try an SOS alert</div><div className="panel-subtitle">Preview only. No contact is connected and no message will be sent.</div></div><Button className="tiny-close" onClick={() => setShowHelp(false)} aria-label="Close"><Icon name="close" size={18} /></Button></div>
+          <Button className="send-button" onClick={sendAlert}><Icon name="send" size={18} />Preview SOS</Button>
         </div>
       )}
       {sent && (
         <div className="delivery-card" role="status">
           <span className="delivery-icon"><Icon name="check" size={22} /></span>
-          <span><strong>SOS delivered to Maya</strong><small>Live location shared</small><em><i /> Delivered just now</em></span>
+          <span><strong>Preview complete</strong><small>No alert was sent.</small></span>
         </div>
       )}
     </div>
   );
-}
-
-// Live MJPEG video from the cane. If the cane can't be reached, it keeps retrying every few
-// seconds, so the video appears on its own once the cane is turned on.
-// The ESP32 only streams to one viewer at a time, so the connection is closed when this view goes away.
-function CaneStream({ onStatus }: { onStatus: (status: StreamStatus) => void }) {
-  const img = useRef<HTMLImageElement>(null);
-
-  useEffect(() => {
-    const element = img.current;
-    if (!element) return;
-    let retryTimer = 0;
-    let heartbeat = 0;
-    let missed = 0;
-
-    const connect = () => { element.src = `${CANE_STREAM_URL}?t=${Date.now()}`; };
-    const fail = () => {
-      window.clearInterval(heartbeat);
-      heartbeat = 0;
-      window.clearTimeout(retryTimer);
-      onStatus("offline");
-      retryTimer = window.setTimeout(connect, CANE_RETRY_MS);
-    };
-    // The browser doesn't report when a running stream dies (e.g. the cane is switched off) and just
-    // freezes on the last frame, so while live, check that the cane still answers.
-    const live = () => {
-      onStatus("live");
-      if (heartbeat) return;
-      missed = 0;
-      heartbeat = window.setInterval(() => {
-        fetch(`http://${CANE_IP}/status`, { mode: "no-cors", cache: "no-store", signal: AbortSignal.timeout(3000) })
-          .then(() => { missed = 0; })
-          .catch(() => { if (++missed >= 2) fail(); });
-      }, CANE_RETRY_MS);
-    };
-
-    element.addEventListener("load", live);
-    element.addEventListener("error", fail);
-    onStatus("connecting");
-    connect();
-    return () => {
-      window.clearTimeout(retryTimer);
-      window.clearInterval(heartbeat);
-      element.removeEventListener("load", live);
-      element.removeEventListener("error", fail);
-      element.src = "";
-    };
-  }, [onStatus]);
-
-  return <img ref={img} alt="Live view from the cane's camera" />;
 }
 
 // Small live preview of the cane's camera for the Home screen.
 function CanePreview() {
-  const [stream, setStream] = useState<StreamStatus>("connecting");
+  const { status, connected } = useVision();
   return <>
-    <CaneStream onStatus={setStream} />
-    {stream === "offline"
-      ? <div className="camera-mini-empty"><Icon name="cameraOff" size={17} />Cane camera offline</div>
-      : <span className="object-tag">{stream === "live" ? "Live" : "Connecting…"}</span>}
+    {connected && status?.phase === "live" ? <><VisionImage status={status} alt="Camera processed by laptop detection" /><span className="object-tag">Detection live</span></> : <div className="camera-mini-empty"><Icon name="cameraOff" size={17} />Open camera to start</div>}
   </>;
-}
-
-function Camera({ caretaker }: { caretaker: boolean }) {
-  const [sharing, setSharing] = useState(false);
-  const [requested, setRequested] = useState(false);
-  const [stream, setStream] = useState<StreamStatus>("connecting");
-  const feedVisible = !caretaker || sharing;
-  const showFeed = feedVisible && stream !== "offline";
-
-  const request = () => {
-    setRequested(true);
-  };
-
-  const connection = !feedVisible
-    ? { light: "", title: "Camera private", detail: "Waiting for user approval", badge: "OFF" }
-    : stream === "live" ? { light: "online", title: "Cane camera connected", detail: `Live from cane · ${CANE_IP}`, badge: "LIVE" }
-    : stream === "offline" ? { light: "", title: "Camera offline", detail: `Can't reach the cane at ${CANE_IP} · retrying`, badge: "OFF" }
-    : { light: "", title: "Connecting to cane…", detail: CANE_IP, badge: "…" };
-
-  return (
-    <div className="screen camera-screen">
-      <header className="page-header"><div><div className="overline">LIVE CAMERA</div><div className="page-title">{caretaker ? "See what Alex sees." : "Your surroundings."}</div></div><span className={caretaker ? (sharing ? "share-pill" : "private-pill") : "detection-pill"}><i />{caretaker ? (sharing ? " SHARED" : " PRIVATE") : " DETECTION ACTIVE"}</span></header>
-      <div className={`camera-view ${showFeed ? "camera-live" : "camera-paused"}`}>
-        {!feedVisible ? <div className="camera-empty"><Icon name="cameraOff" size={36} /><strong>Camera is private</strong><small>Object detection continues locally. Live video requires Alex’s approval.</small></div>
-          : <>
-              <CaneStream onStatus={setStream} />
-              {stream === "offline" && <div className="camera-empty"><Icon name="cameraOff" size={36} /><strong>Waiting for the cane…</strong><small>The video will appear on its own once the cane is on and this device is on the same hotspot. The cane streams to one viewer at a time, so close any other tab showing it.</small></div>}
-            </>}
-        {showFeed && <><span className="detect-box"><i>Bench · 12 ft</i></span><span className="detect-box second"><i>Pedestrian · 24 ft</i></span><span className="sim-label">OBJECT DETECTION · SIMULATED</span></>}
-        {showFeed && <div className="object-panel"><span className="direction-arrow">↑</span><span><small>AHEAD · LOW PRIORITY</small><strong>Park bench in 12 feet</strong></span></div>}
-      </div>
-      <div className="camera-connection"><span className={`connection-light ${connection.light}`} /><span><strong>{connection.title}</strong><small>{connection.detail}</small></span><span className="connection-quality">{connection.badge}</span></div>
-      {feedVisible && <>
-        <div className="camera-section-title"><span>Objects detected</span><small>Computer vision · simulated</small></div>
-        <div className="detection-list">
-          <div className="detection-item"><span className="detection-symbol">↑</span><span><strong>Park bench</strong><small>Directly ahead</small></span><span><strong>12 ft</strong><small>96% confidence</small></span></div>
-          <div className="detection-item"><span className="detection-symbol">↗</span><span><strong>Pedestrian</strong><small>Right side</small></span><span><strong>24 ft</strong><small>91% confidence</small></span></div>
-          <div className="detection-item"><span className="detection-symbol">←</span><span><strong>Tree</strong><small>Left side</small></span><span><strong>8 ft</strong><small>88% confidence</small></span></div>
-        </div>
-        <div className="obstacle-alert"><span className="obstacle-icon"><Icon name="alert" size={21} /></span><span><strong>Obstacle awareness</strong><small>Bench ahead · 12 ft · Low priority</small><em>Sonar + vision data simulated</em></span></div>
-      </>}
-      {!caretaker && <div className={`sharing-status ${sharing ? "is-sharing" : ""}`}><span className="sharing-status-icon"><Icon name={sharing ? "camera" : "shield"} size={19} /></span><span><strong>{sharing ? "Camera shared with Maya" : "Not shared with caretaker"}</strong><small>{sharing ? "Maya can view this live feed." : "Object detection runs privately on your cane."}</small></span></div>}
-      {caretaker && !sharing && !requested && <Button className="camera-action primary" onClick={request}><Icon name="camera" size={20} />Request live camera</Button>}
-      {caretaker && requested && !sharing && (
-        <div className="approval-card">
-          <span className="approval-icon"><Icon name="person" size={22} /></span>
-          <span><strong>Waiting for Alex’s approval</strong><small>The camera remains private until approved.</small></span>
-          <Button onClick={() => setSharing(true)}>Simulate Alex’s approval</Button>
-        </div>
-      )}
-      {!caretaker && !sharing && <Button className="camera-action primary" onClick={() => setSharing(true)}><Icon name="camera" size={19} />Share Camera with Maya</Button>}
-      {sharing && <Button className="camera-action stop" onClick={() => { setSharing(false); setRequested(false); }}><Icon name="cameraOff" size={19} />Stop Sharing</Button>}
-      <div className="privacy-note"><Icon name="shield" size={18} /><span><strong>Privacy first</strong><small>Camera access is visible, temporary, and always under user control.</small></span></div>
-    </div>
-  );
 }
 
 function SettingRow({ icon, title, detail, children, onClick }: { icon: IconName; title: string; detail?: string; children?: ReactNode; onClick?: () => void }) {
@@ -307,6 +225,20 @@ function SettingRow({ icon, title, detail, children, onClick }: { icon: IconName
 type Preferences = { voice: boolean; reconnect: boolean; location: boolean; paired: boolean; volume: number; largeText: boolean; reduceMotion: boolean };
 
 function SettingsSheet({ close, caretaker, setCaretaker, preferences, setPreferences }: { close: () => void; caretaker: boolean; setCaretaker: (value: boolean) => void; preferences: Preferences; setPreferences: (value: Preferences) => void }) {
+  const account = useAccount();
+  const { session } = useAuth();
+  const { command } = useVision();
+  const [signingOut, setSigningOut] = useState(false);
+  const [logoutError, setLogoutError] = useState("");
+  async function logout() {
+    setSigningOut(true); setLogoutError("");
+    try {
+      await account.flush();
+      await command("disconnect");
+      const { error } = await supabase.auth.signOut({ scope: "local" });
+      if (error) throw error;
+    } catch (error) { setLogoutError((error as Error).message); setSigningOut(false); }
+  }
   const { voice, reconnect, location, paired, volume } = preferences;
   const setVoice = (voice: boolean) => setPreferences({ ...preferences, voice });
   const setReconnect = (reconnect: boolean) => setPreferences({ ...preferences, reconnect });
@@ -325,20 +257,24 @@ function SettingsSheet({ close, caretaker, setCaretaker, preferences, setPrefere
           <div>{view === "main" ? "Settings" : view === "connection" ? "Connection setup" : view === "accessibility" ? "Accessibility" : "Trusted caretaker"}</div>
           <Button className="tiny-close" onClick={close} aria-label="Close settings"><Icon name="close" size={19} /></Button>
         </div>
+        <div className="sheet-content" key={view}>
         {view === "main" && <>
           <div className="setting-section">EXPERIENCE</div>
           <div className="settings-card">
-            <SettingRow icon="volume" title="Voice announcements" detail="Objects, directions, and status"><Switch on={voice} setOn={setVoice} label="Voice announcements" /></SettingRow>
-            <SettingRow icon="volume" title="Alert volume" detail={`${volume === 0 ? "Muted" : volume < 40 ? "Quiet" : volume < 80 ? "Comfortable" : "Loud"} · ${volume}%`}><input className="mini-range" aria-label="Alert volume" type="range" min="0" max="100" value={volume} onChange={(event) => setPreferences({ ...preferences, volume: Number(event.target.value) })} /></SettingRow>
+            <SettingRow icon="volume" title="Voice announcements" detail="Used for your next detection run"><Switch on={voice} setOn={setVoice} label="Voice announcements" /></SettingRow>
+            <SettingRow icon="volume" title="Alert volume" detail={`${volume}% · Saved preference; device sync not connected`}><input className="mini-range" aria-label="Alert volume" type="range" min="0" max="100" value={volume} onChange={(event) => setPreferences({ ...preferences, volume: Number(event.target.value) })} /></SettingRow>
             <SettingRow icon="accessibility" title="Accessibility" detail="Text size, motion, screen readers" onClick={() => setView("accessibility")} />
           </div>
           <div className="setting-section">CONNECTIONS & TRUST</div>
           <div className="settings-card">
-            <SettingRow icon="bluetooth" title="Cane connection" detail={`Bluetooth + Wi-Fi · ${paired ? "Connected" : "Disconnected"}`} onClick={() => setView("connection")} />
+            <SettingRow icon="bluetooth" title="Cane connection" detail={paired ? "Pairing preview active" : "Pairing not set up"} onClick={() => setView("connection")} />
             <SettingRow icon="wifi" title="Automatic reconnection" detail="Reconnect whenever available"><Switch on={reconnect} setOn={setReconnect} label="Automatic reconnection" /></SettingRow>
-            <SettingRow icon="person" title="Trusted caretaker" detail={`Maya Chen · Location ${location ? "allowed" : "off"}`} onClick={() => setView("caretaker")} />
+            <SettingRow icon="person" title="Trusted caretaker" detail="View sharing setup preview" onClick={() => setView("caretaker")} />
           </div>
           <div className="mode-row"><span><strong>Caretaker mode preview</strong><small>See the simplified shared dashboard</small></span><Switch on={caretaker} setOn={setCaretaker} label="Caretaker mode preview" /></div>
+          <div className="setting-section">DETECTION THRESHOLDS</div>
+          <div className="settings-card threshold-settings"><label>Warning distance (cm)<input aria-label="Warning distance" type="number" min="1" max="10000" value={account.settings!.warning_distance_cm} onChange={event => { const value = Number(event.target.value); if (value >= 1 && value <= 10000) account.updateSettings({ warning_distance_cm: value }); }} /></label><label>Warning confidence (%)<input aria-label="Warning confidence" type="number" min="1" max="100" value={Math.round(account.settings!.warning_confidence * 100)} onChange={event => { const value = Number(event.target.value); if (value >= 1 && value <= 100) account.updateSettings({ warning_confidence: value / 100 }); }} /></label><p>Applied when you start your next run.</p></div>
+          <div className="account-footer"><strong>{account.displayName}</strong><span>{session?.user.email}</span><small role="status">{account.saving ? "Saving preferences…" : account.error ? "Changes need to be saved" : "Preferences saved to your account"}</small>{account.error && <><p className="vision-error" role="alert">{account.error}</p><button className="auth-text-button" onClick={account.retry}>Retry saving</button></>}{logoutError && <p className="vision-error" role="alert">{logoutError}</p>}<button className="camera-action stop" disabled={signingOut} onClick={() => void logout()}>{signingOut ? "Logging out…" : "Log out"}</button></div>
         </>}
         {view === "accessibility" && <>
           <div className="setting-section">DISPLAY & MOTION</div>
@@ -350,21 +286,22 @@ function SettingsSheet({ close, caretaker, setCaretaker, preferences, setPrefere
         </>}
         {view === "connection" && <div className="setup-content">
           <div className={`setup-orb ${paired ? "paired" : ""}`}><Icon name={paired ? "check" : "bluetooth"} size={31} /></div>
-          <div className="setup-title">{paired ? "Cane is connected" : "Ready to pair"}</div>
-          <div className="setup-copy">{paired ? `Bluetooth and Wi-Fi are configured. Automatic reconnection is ${reconnect ? "active" : "off"}.` : "Keep the cane nearby and press its pairing button."}</div>
-          <div className="connection-detail"><span>Smart Cane SC-204</span><strong>{paired ? "Connected" : "Available"}</strong></div>
-          <Button className="sheet-primary" onClick={() => setPaired(!paired)}>{paired ? "Disconnect for demo" : "Connect cane"}</Button>
+          <div className="setup-title">Pair your cane</div>
+          <div className="setup-copy">Pairing is a preview. Your camera connection works separately when your phone and cane are on the same network.</div>
+          <div className="connection-detail"><span>Smart cane</span><strong>{paired ? "Preview paired" : "Not paired"}</strong></div>
+          <Button className="sheet-primary" onClick={() => setPaired(!paired)}>{paired ? "Reset preview" : "Preview pairing"}</Button>
           <div className="prototype-note">Hardware connection is simulated in this prototype.</div>
         </div>}
         {view === "caretaker" && <div className="caretaker-settings">
-          <div className="caretaker-profile"><span>MC</span><div><strong>Maya Chen</strong><small>Trusted caretaker · Active</small></div></div>
+          <div className="caretaker-profile"><span>MC</span><div><strong>Maya Chen</strong><small>Example contact · Preview only</small></div></div>
           <div className="settings-card">
-            <SettingRow icon="location" title="Share live location" detail={location ? "Maya can see your current location" : "Location sharing is off"}><Switch on={location} setOn={setLocation} label="Share live location" /></SettingRow>
+            <SettingRow icon="location" title="Share live location" detail="Preview preference · no location is shared"><Switch on={location} setOn={setLocation} label="Share live location" /></SettingRow>
             <SettingRow icon="camera" title="Camera requests" detail="Always requires your approval"><span className="locked-label">ASK</span></SettingRow>
-            <SettingRow icon="alert" title="SOS emergency alerts" detail="Notifies Maya and shares location"><span className="locked-label">ON</span></SettingRow>
+            <SettingRow icon="alert" title="SOS emergency alerts" detail="Emergency contacts aren’t connected"><span className="locked-label">NOT SET UP</span></SettingRow>
           </div>
           <div className="permission-note"><Icon name="shield" size={20} />You stay in control. Camera access can never begin without your approval.</div>
         </div>}
+        </div>
       </div>
     </div>
   );
@@ -372,27 +309,41 @@ function SettingsSheet({ close, caretaker, setCaretaker, preferences, setPrefere
 
 const tabs: { id: Tab; label: string }[] = [
   { id: "home", label: "Home" }, { id: "safety", label: "Safety" }, { id: "camera", label: "Camera" },
+  { id: "history", label: "History" },
 ];
 
 export default function App() {
-  const [tab, setTab] = useState<Tab>("home");
+  const account = useAccount();
+  const [tab, setActiveTab] = useState<Tab>("home");
+  const [direction, setDirection] = useState(1);
+  function setTab(next: Tab) {
+    if (next === tab) return;
+    setDirection(tabs.findIndex(item => item.id === next) > tabs.findIndex(item => item.id === tab) ? 1 : -1);
+    setActiveTab(next);
+  }
   const [settings, setSettings] = useState(false);
   const [caretaker, setCaretaker] = useState(false);
-  const [preferences, setPreferences] = useState<Preferences>({ voice: true, reconnect: true, location: true, paired: true, volume: 70, largeText: false, reduceMotion: false });
+  const [previewPreferences, setPreviewPreferences] = useState({ location: false, paired: false });
+  const saved = account.settings!;
+  const preferences: Preferences = { ...previewPreferences, voice: saved.voice_enabled, reconnect: saved.automatic_reconnect, volume: saved.volume, largeText: saved.large_text, reduceMotion: saved.reduce_motion };
+  function setPreferences(next: Preferences) {
+    setPreviewPreferences({ location: next.location, paired: next.paired });
+    account.updateSettings({ voice_enabled: next.voice, automatic_reconnect: next.reconnect, volume: next.volume, large_text: next.largeText, reduce_motion: next.reduceMotion });
+  }
   return (
     <main className="app-shell">
       <div className={`phone${preferences.largeText ? " large-text" : ""}${preferences.reduceMotion ? " reduce-motion" : ""}`}>
-        <div className="statusbar"><strong>9:41</strong><span><i /><i /><b /></span></div>
-        <div className="viewport">
+        <div className="viewport" data-tab={tab} style={{ "--screen-offset": `${direction * 14}px` } as CSSProperties} inert={settings}>
           {tab === "home" && <Home setTab={setTab} openSettings={() => setSettings(true)} caretaker={caretaker} />}
           {tab === "safety" && <Safety caretaker={caretaker} />}
-          {tab === "camera" && <Camera caretaker={caretaker} />}
+          {tab === "camera" && <VisionCamera caretaker={caretaker} />}
+          {tab === "history" && <History startCamera={() => setTab("camera")} />}
         </div>
-        <nav className="tabbar" aria-label="Primary navigation">
+        <nav className="tabbar" aria-label="Primary navigation" inert={settings}>
+          <span className="tab-indicator" aria-hidden="true" style={{ transform: `translateX(${tabs.findIndex(item => item.id === tab) * 100}%)` }} />
           {tabs.map((item) => <Button key={item.id} className={`tab ${tab === item.id ? "active" : ""}`} onClick={() => setTab(item.id)} aria-current={tab === item.id ? "page" : undefined}><Icon name={item.id} size={22} /><span>{item.label}</span></Button>)}
         </nav>
-        <div className="homebar" />
-        {settings && <SettingsSheet preferences={preferences} setPreferences={setPreferences} close={() => setSettings(false)} caretaker={caretaker} setCaretaker={setCaretaker} />}
+        <MotionPresence open={settings} className="settings-presence" onClose={() => setSettings(false)}><SettingsSheet preferences={preferences} setPreferences={setPreferences} close={() => setSettings(false)} caretaker={caretaker} setCaretaker={setCaretaker} /></MotionPresence>
       </div>
     </main>
   );

@@ -1,5 +1,58 @@
 # Computer Vision
 
+## Run recognition inside the laptop app
+
+The React Camera tab can now control the Python pipeline and show its real
+detections, annotated images, sonar readings, and last warning.
+
+1. Install the Python dependencies: `python -m pip install -r requirements.txt`.
+2. From `App/frontend`, run `npm run vision` in one terminal and `npm run dev`
+   in another. If the UI is already running, leave it running.
+3. Sign up or log in, then open the app's Camera tab. Choose **Physical cane**, enter its hotspot IP,
+   and press **Start cane detection**. The laptop must share its network.
+4. Without the cane, choose **Laptop webcam** and press **Start webcam test**.
+   Optionally enable simulated distance to exercise warning thresholds. This
+   value is explicitly simulated; webcam tests never send warnings to a cane.
+5. Press **Stop detection** to release the camera. Switching UI tabs does not
+   stop detection. Closing the browser does not stop it either; use Stop or
+   Ctrl+C in the Python terminal when finished.
+
+`python serve.py` from this folder is equivalent to `npm run vision`. The
+service binds to `127.0.0.1:8765` and remains idle until started from the app.
+Only local browser origins can control it. The model downloads on first start;
+loading/dependency errors are shown in the app. Custom weights can be supplied
+with `python serve.py --model path/to/model.pt`.
+
+The API requires your Supabase access token; it verifies identity through
+Supabase Auth and never accepts a user ID supplied by the browser. Live camera
+results are visible only to the account that started the run. Everyone uses
+the same physical cane, one run at a time, without permanent cane ownership.
+
+Sessions, grouped sightings, and warning decisions sync to that account's
+Supabase history. Uploads run separately from inference. If uploads fail, a
+SQLite outbox in `data/history_queue.sqlite3` retains them until the same user
+reconnects. Tokens are held in memory, not stored in the outbox. No images or
+video are uploaded. Log out or use Stop detection to end your run.
+
+Project URL and publishable key are shared with the frontend in
+`App/frontend/src/supabase-config.json`. To use another project, change that
+file, or set `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` for Python along with
+the frontend's corresponding `VITE_` overrides. Do not use a service-role key.
+
+Account setup and email redirect requirements are in `App/frontend/AUTH.md`.
+
+Python alone opens the ESP32 stream; the UI retrieves processed JPEGs from
+Python, avoiding a second competing connection to the cane. Close other direct
+camera viewers (including `test_stream.py`) before starting.
+
+Hardware-free API/inference-loop checks: `python -m unittest test_serve -v`.
+These use fake input/model output, not physical camera measurements. Existing
+threshold rules in `cane_logic.py` are reused unchanged. The stock YOLO model
+does not detect doors, stairs, or curbs.
+
+This integration runs in the laptop browser with the local Python service.
+No Android Studio, Xcode, or mobile packaging dependencies are needed.
+
 Python prototyping for the cane's camera mode: read the ESP32 video, run YOLO, and later train our own door / stairs / curb model. Only the final exported model goes into the app.
 
 ## One-time setup (Mac)
