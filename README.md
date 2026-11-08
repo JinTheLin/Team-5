@@ -32,14 +32,6 @@ The cane does three jobs: stream video, measure distance, and talk. All of the d
 - Emergency contact with a "Call" button
 - A simulated cane, so you can test everything without the hardware
 
-Still not done:
-
-- Bluetooth pairing is a preview screen only. The cane talks to the laptop over WiFi.
-- Fall detection is not connected.
-- Curbs aren't detected. We couldn't find a public labelled curb dataset, so this needs our own photos.
-- The caretaker has to use the same laptop as the cane user for now (a second browser window). Links are saved on that laptop, not in the cloud.
-- The volume slider is saved but doesn't change the cane's volume yet.
-
 ## Folder layout
 
 ```
