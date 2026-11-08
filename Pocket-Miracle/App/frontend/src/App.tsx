@@ -126,7 +126,7 @@ function Home({ setTab, openSettings, caretaker }: { setTab: (tab: Tab) => void;
     <div className="screen home-screen">
       <header className="hello">
         <div><div className="overline">{caretaker ? "CARETAKER PREVIEW" : `HELLO, ${displayName}`}</div><div className="title">{caretaker ? "Stay in touch." : "Your everyday companion."}</div></div>
-        <Button className="round-button" onClick={openSettings} aria-label="Open settings"><Icon name="settings" size={21} /></Button>
+        <Button className="round-button" onClick={() => openSettings()} aria-label="Open settings"><Icon name="settings" size={21} /></Button>
       </header>
       {caretaker ? (
         <div className="caretaker-hero">
@@ -166,7 +166,7 @@ function Home({ setTab, openSettings, caretaker }: { setTab: (tab: Tab) => void;
   );
 }
 
-function Safety({ caretaker, openSettings }: { caretaker: boolean; openSettings: (view?: "main" | "emergency") => void }) {
+function Safety({ caretaker, openSettings }: { caretaker: boolean; openSettings: (view?: "main" | "emergency") => void; caretaker: boolean }) {
   const { settings } = useAccount();
   const [showHelp, setShowHelp] = useState(false);
   const contactName = settings?.emergency_contact_name;
