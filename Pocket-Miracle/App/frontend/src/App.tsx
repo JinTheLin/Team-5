@@ -4,6 +4,7 @@ import { VisionImage, useVision } from "./vision";
 import { useAccount, useAuth } from "./account";
 import { supabase } from "./supabase";
 import History from "./History";
+import { CaretakerCamera, CaretakerHome, CaretakerProvider, CaretakerSafety, CaretakerSettings, LiveShareBanner, mapLink, nameOf, useCaretakerMode, useSos } from "./care";
 
 type Tab = "home" | "safety" | "camera" | "history";
 type IconName =
@@ -111,23 +112,27 @@ function DeviceCard() {
   );
 }
 
+function callEmergencyContact(phone: string | null) {
+  if (!phone || !/^\+?[0-9]{7,15}$/.test(phone)) return;
+  window.location.href = `tel:${phone}`;
+}
+
 function Home({ setTab, openSettings, caretaker }: { setTab: (tab: Tab) => void; openSettings: () => void; caretaker: boolean }) {
-  const { displayName } = useAccount();
+  const { displayName, settings } = useAccount();
+  const { status } = useVision();
+  const contactName = settings?.emergency_contact_name;
+  const contactPhone = settings?.emergency_contact_phone;
   const [emergencyOpen, setEmergencyOpen] = useState(false);
-  const [sent, setSent] = useState(false);
+  const sos = useSos();
+  const caretakers = status?.care?.caretakers || [];
 
   return (
     <div className="screen home-screen">
       <header className="hello">
-        <div><div className="overline">{caretaker ? "CARETAKER PREVIEW" : `HELLO, ${displayName}`}</div><div className="title">{caretaker ? "Stay in touch." : "Your everyday companion."}</div></div>
+        <div><div className="overline">{caretaker ? "CARETAKER" : `HELLO, ${displayName}`}</div><div className="title">{caretaker ? "Stay in touch." : "Your everyday companion."}</div></div>
         <Button className="round-button" onClick={openSettings} aria-label="Open settings"><Icon name="settings" size={21} /></Button>
       </header>
-      {caretaker ? (
-        <div className="caretaker-hero">
-          <div className="caretaker-top"><span className="person-avatar">A</span><div><div className="device-title">Alex’s Smart Cane</div><div className="soft-status">Example caretaker view</div></div></div>
-          <div className="caretaker-clear"><Icon name="shield" size={27} /><div><strong>Monitoring not connected</strong><span>Alerts will appear here once set up.</span></div></div>
-        </div>
-      ) : <DeviceCard />}
+      {caretaker ? <CaretakerHome /> : <DeviceCard />}
       <div className="home-section-heading"><span>YOUR DAY, AT A GLANCE</span><span className="section-rule" /></div>
       <div className="feature-grid">
         <Button className="feature-card" onClick={() => setTab("safety")}>
@@ -135,74 +140,85 @@ function Home({ setTab, openSettings, caretaker }: { setTab: (tab: Tab) => void;
           <div className="feature-description">Stay connected to someone you trust.</div>
         </Button>
         <Button className="feature-card" onClick={() => setTab("camera")}>
-          <div className="feature-heading"><span className="feature-icon blue"><Icon name="camera" size={19} /></span><span><strong>{caretaker ? "Camera" : "Cane camera"}</strong><small>{caretaker ? "Approval required" : "View surroundings"}</small></span><Icon name="chevron" size={18} /></div>
+          <div className="feature-heading"><span className="feature-icon blue"><Icon name="camera" size={19} /></span><span><strong>{caretaker ? "Live view" : "Cane camera"}</strong><small>{caretaker ? "Approval required" : "View surroundings"}</small></span><Icon name="chevron" size={18} /></div>
           <div className="camera-mini">
-            {caretaker ? <div className="camera-mini-empty"><Icon name="cameraOff" size={17} />Camera is private</div> : <CanePreview />}
+            {caretaker ? <div className="camera-mini-empty"><Icon name="cameraOff" size={17} />Ask to see their camera</div> : <CanePreview />}
           </div>
         </Button>
       </div>
 
-      <div className="fall-card">
-        <span className="fall-icon"><Icon name="shield" size={21} /></span>
-        <span><strong>Fall detection</strong><small>Not connected yet</small></span>
-      </div>
-
-      <Button className="help-button" onClick={() => { setEmergencyOpen(true); setSent(false); }}><Icon name="alert" size={22} />Emergency help</Button>
-      <MotionPresence open={emergencyOpen} className="home-emergency-layer" onClose={() => setEmergencyOpen(false)}>
-        <div className="emergency-dialog" role="dialog" aria-modal="true" aria-label="Emergency assistance">
-          <Button className="emergency-scrim" onClick={() => setEmergencyOpen(false)} aria-label="Close emergency assistance" />
-          <div className="home-emergency-sheet">
-            {!sent ? <>
-              <div className="emergency-grabber" />
-              <div className="panel-top">
-                <div><div className="emergency-kicker">EMERGENCY HELP · PREVIEW</div><div className="emergency-title">Try an SOS alert</div><div className="panel-subtitle">Emergency contacts are not connected. This preview will not send a message.</div></div>
-                <Button className="tiny-close" onClick={() => setEmergencyOpen(false)} aria-label="Close"><Icon name="close" size={18} /></Button>
-              </div>
-              <div className="sos-summary"><span className="sos-summary-icon"><Icon name="location" size={21} /></span><span><strong>Location unavailable</strong><small>Connect location and a trusted contact first.</small></span></div>
-              <Button className="send-button home-send" onClick={() => setSent(true)}><Icon name="send" size={18} />Preview SOS</Button>
-            </> : <div className="home-delivered" role="status">
-              <span className="delivery-icon"><Icon name="check" size={24} /></span>
-              <div className="emergency-title">Preview complete</div>
-              <div className="delivered-copy">No alert was sent. Once connected, your contact can receive your request for help.</div>
-              <Button className="sheet-primary" onClick={() => setEmergencyOpen(false)}>Done</Button>
-            </div>}
-          </div>
+      {!caretaker && <>
+        <div className="fall-card">
+          <span className="fall-icon"><Icon name="shield" size={21} /></span>
+          <span><strong>Fall detection</strong><small>Not connected yet</small></span>
         </div>
-      </MotionPresence>
+
+        <Button className="help-button" onClick={() => { setEmergencyOpen(true); sos.reset(); }}><Icon name="alert" size={22} />Emergency help</Button>
+        <MotionPresence open={emergencyOpen} className="home-emergency-layer" onClose={() => setEmergencyOpen(false)}>
+          <div className="emergency-dialog" role="dialog" aria-modal="true" aria-label="Emergency assistance">
+            <Button className="emergency-scrim" onClick={() => setEmergencyOpen(false)} aria-label="Close emergency assistance" />
+            <div className="home-emergency-sheet">
+              {!sos.sent ? <>
+                <div className="emergency-grabber" />
+                <div className="panel-top">
+                  <div><div className="emergency-kicker">EMERGENCY HELP</div><div className="emergency-title">Send an SOS alert</div><div className="panel-subtitle">{caretakers.length ? `${caretakers.map(nameOf).join(", ")} will be alerted and can see your cane camera.` : "No caretaker is linked yet. Link one in Settings → Trusted caretaker."}</div></div>
+                  <Button className="tiny-close" onClick={() => setEmergencyOpen(false)} aria-label="Close"><Icon name="close" size={18} /></Button>
+                </div>
+                <div className="sos-summary"><span className="sos-summary-icon"><Icon name="location" size={21} /></span><span><strong>Your location is included</strong><small>If you allow location access when asked.</small></span></div>
+                {sos.error && <p className="vision-error" role="alert">{sos.error}</p>}
+                <Button className="send-button home-send" disabled={sos.busy || !caretakers.length} onClick={() => void sos.send()}><Icon name="send" size={18} />{sos.busy ? "Sending…" : "Send SOS"}</Button>
+                {contactPhone ? <Button className="sheet-primary home-call" onClick={() => callEmergencyContact(contactPhone)}><Icon name="alert" size={18} />Call {contactName || "emergency contact"}</Button>
+                  : <Button className="sheet-primary home-call" onClick={() => { setEmergencyOpen(false); openSettings(); }}><Icon name="settings" size={18} />Set emergency contact</Button>}
+              </> : <div className="home-delivered" role="status">
+                <span className="delivery-icon"><Icon name="check" size={24} /></span>
+                <div className="emergency-title">Help is on the way</div>
+                <div className="delivered-copy">Alert sent to {sos.sent.delivered_to} caretaker{sos.sent.delivered_to === 1 ? "" : "s"}{sos.sent.location ? " with your location" : " without location"}. Your camera is shared with them until you stop it.</div>
+                <Button className="sheet-primary" onClick={() => setEmergencyOpen(false)}>Done</Button>
+              </div>}
+            </div>
+          </div>
+        </MotionPresence>
+      </>}
     </div>
   );
 }
 
-function Safety({ caretaker }: { caretaker: boolean }) {
+function Safety({ openSettings }: { openSettings: () => void }) {
+  const { status, connected } = useVision();
+  const { settings } = useAccount();
+  const contactName = settings?.emergency_contact_name;
+  const contactPhone = settings?.emergency_contact_phone;
   const [showHelp, setShowHelp] = useState(false);
-  const [sent, setSent] = useState(false);
-
-  const sendAlert = () => {
-    setSent(true);
-    window.setTimeout(() => setSent(true), 500);
-  };
+  const sos = useSos();
+  const care = status?.care;
+  const caretakers = care?.caretakers || [];
+  const lastLocation = care?.alerts.find(alert => alert.location)?.location;
 
   return (
     <div className="screen">
-      <header className="page-header"><div><div className="overline">SAFETY</div><div className="page-title">{caretaker ? "Shared safety" : "Your support circle."}</div></div></header>
+      <header className="page-header"><div><div className="overline">SAFETY</div><div className="page-title">Your support circle.</div></div></header>
       <div className="safety-map-wrap">
-        <div className="location-empty"><Icon name="location" size={32} /><h2>Location isn’t connected</h2><p>Your shared location will appear here after location sharing is set up.</p></div>
+        <div className="location-empty"><Icon name="location" size={32} /><h2>{lastLocation ? "Location sent with your last SOS" : "Location is shared only with an SOS"}</h2><p>{lastLocation ? <a href={mapLink(lastLocation)} target="_blank" rel="noreferrer">Open it on a map</a> : "When you send an SOS, your caretaker gets where you are."}</p></div>
       </div>
       <div className="safety-row">
-        <div><span className="safety-icon"><Icon name="shield" size={20} /></span><span><strong>Fall monitoring</strong><small>Not connected</small></span></div>
-        <div><span className="safety-icon"><Icon name="person" size={20} /></span><span><strong>Trusted contact</strong><small>Not set up</small></span></div>
+        <div><span className="safety-icon"><Icon name="person" size={20} /></span><span><strong>Caretaker</strong><small>{!connected ? "Laptop service offline" : caretakers.length ? caretakers.map(nameOf).join(", ") : "Not set up · Settings"}</small></span></div>
+        <div><span className="safety-icon"><Icon name="alert" size={20} /></span><span><strong>Emergency contact</strong><small>{contactPhone ? `${contactName || "Contact"} · ${contactPhone}` : "Not set up"}</small></span></div>
+        <div><span className="safety-icon"><Icon name="shield" size={20} /></span><span><strong>Last SOS</strong><small>{care?.alerts[0] ? new Date(care.alerts[0].at * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "None sent"}</small></span></div>
       </div>
-      {!showHelp && !sent && <Button className="assist-button" onClick={() => setShowHelp(true)}><Icon name="alert" size={20} />SOS Emergency Assistance</Button>}
-      {showHelp && !sent && (
+      {!showHelp && !sos.sent && <Button className="assist-button" onClick={() => setShowHelp(true)}><Icon name="alert" size={20} />SOS Emergency Assistance</Button>}
+      {showHelp && !sos.sent && (
         <div className="emergency-panel">
-          <div className="panel-top"><div><div className="panel-title">Try an SOS alert</div><div className="panel-subtitle">Preview only. No contact is connected and no message will be sent.</div></div><Button className="tiny-close" onClick={() => setShowHelp(false)} aria-label="Close"><Icon name="close" size={18} /></Button></div>
-          <Button className="send-button" onClick={sendAlert}><Icon name="send" size={18} />Preview SOS</Button>
+          <div className="panel-top"><div><div className="panel-title">Send an SOS alert</div><div className="panel-subtitle">{caretakers.length ? "Your caretaker gets an alert with your location and can see your cane camera until you stop it." : "Link a caretaker in Settings first."}</div></div><Button className="tiny-close" onClick={() => setShowHelp(false)} aria-label="Close"><Icon name="close" size={18} /></Button></div>
+          {sos.error && <p className="vision-error" role="alert">{sos.error}</p>}
+          <Button className="send-button" disabled={sos.busy || !caretakers.length} onClick={() => void sos.send()}><Icon name="send" size={18} />{sos.busy ? "Sending…" : "Send SOS"}</Button>
+          {contactPhone ? <Button className="sheet-primary home-call" onClick={() => callEmergencyContact(contactPhone)}><Icon name="alert" size={18} />Call {contactName || "emergency contact"}</Button>
+            : <Button className="sheet-primary home-call" onClick={() => { setShowHelp(false); openSettings(); }}><Icon name="settings" size={18} />Set emergency contact</Button>}
         </div>
       )}
-      {sent && (
+      {sos.sent && (
         <div className="delivery-card" role="status">
           <span className="delivery-icon"><Icon name="check" size={22} /></span>
-          <span><strong>Preview complete</strong><small>No alert was sent.</small></span>
+          <span><strong>SOS sent</strong><small>{sos.sent.delivered_to} caretaker{sos.sent.delivered_to === 1 ? "" : "s"} alerted{sos.sent.location ? " with your location" : ""}.</small></span>
         </div>
       )}
     </div>
@@ -227,9 +243,30 @@ type Preferences = { voice: boolean; reconnect: boolean; location: boolean; pair
 function SettingsSheet({ close, caretaker, setCaretaker, preferences, setPreferences }: { close: () => void; caretaker: boolean; setCaretaker: (value: boolean) => void; preferences: Preferences; setPreferences: (value: Preferences) => void }) {
   const account = useAccount();
   const { session } = useAuth();
-  const { command } = useVision();
+  const { command, status } = useVision();
   const [signingOut, setSigningOut] = useState(false);
   const [logoutError, setLogoutError] = useState("");
+  const [contactName, setContactName] = useState(account.settings?.emergency_contact_name || "");
+  const [contactPhone, setContactPhone] = useState(account.settings?.emergency_contact_phone || "");
+  const [contactError, setContactError] = useState("");
+  const [contactStatus, setContactStatus] = useState("");
+  const [contactSaving, setContactSaving] = useState(false);
+  async function saveContact() {
+    const name = contactName.trim();
+    const phone = contactPhone.replace(/[\s().-]/g, "");
+    setContactError(""); setContactStatus("");
+    if ((name && !phone) || (!name && phone)) { setContactError("Enter both a name and phone number, or clear both fields."); return; }
+    if (phone && !/^\+?[0-9]{7,15}$/.test(phone)) { setContactError("Enter a valid phone number, including country code if needed."); return; }
+    setContactSaving(true);
+    try {
+      const { error } = await supabase.from("app_settings").update({ emergency_contact_name: name || null, emergency_contact_phone: phone || null }).eq("user_id", session!.user.id).select("id").single();
+      if (error) throw error;
+      account.updateSettings({ emergency_contact_name: name || null, emergency_contact_phone: phone || null });
+      setContactPhone(phone);
+      setContactStatus(name ? "Emergency contact saved." : "Emergency contact removed.");
+    } catch (error) { setContactError((error as Error).message || "Could not save emergency contact."); }
+    finally { setContactSaving(false); }
+  }
   async function logout() {
     setSigningOut(true); setLogoutError("");
     try {
@@ -239,12 +276,12 @@ function SettingsSheet({ close, caretaker, setCaretaker, preferences, setPrefere
       if (error) throw error;
     } catch (error) { setLogoutError((error as Error).message); setSigningOut(false); }
   }
-  const { voice, reconnect, location, paired, volume } = preferences;
+  const { voice, reconnect, paired, volume } = preferences;
+  const caretakers = status?.care?.caretakers || [];
   const setVoice = (voice: boolean) => setPreferences({ ...preferences, voice });
   const setReconnect = (reconnect: boolean) => setPreferences({ ...preferences, reconnect });
-  const setLocation = (location: boolean) => setPreferences({ ...preferences, location });
   const setPaired = (paired: boolean) => setPreferences({ ...preferences, paired });
-  const [view, setView] = useState<"main" | "connection" | "caretaker" | "accessibility">("main");
+  const [view, setView] = useState<"main" | "connection" | "caretaker" | "accessibility" | "emergency">("main");
 
 
   return (
@@ -254,7 +291,7 @@ function SettingsSheet({ close, caretaker, setCaretaker, preferences, setPrefere
         <div className="sheet-handle" />
         <div className="sheet-header">
           {view !== "main" ? <Button className="back-button" onClick={() => setView("main")}>Back</Button> : <span />}
-          <div>{view === "main" ? "Settings" : view === "connection" ? "Connection setup" : view === "accessibility" ? "Accessibility" : "Trusted caretaker"}</div>
+          <div>{view === "main" ? "Settings" : view === "connection" ? "Connection setup" : view === "accessibility" ? "Accessibility" : view === "emergency" ? "Emergency contact" : "Trusted caretaker"}</div>
           <Button className="tiny-close" onClick={close} aria-label="Close settings"><Icon name="close" size={19} /></Button>
         </div>
         <div className="sheet-content" key={view}>
@@ -269,13 +306,25 @@ function SettingsSheet({ close, caretaker, setCaretaker, preferences, setPrefere
           <div className="settings-card">
             <SettingRow icon="bluetooth" title="Cane connection" detail={paired ? "Pairing preview active" : "Pairing not set up"} onClick={() => setView("connection")} />
             <SettingRow icon="wifi" title="Automatic reconnection" detail="Reconnect whenever available"><Switch on={reconnect} setOn={setReconnect} label="Automatic reconnection" /></SettingRow>
-            <SettingRow icon="person" title="Trusted caretaker" detail="View sharing setup preview" onClick={() => setView("caretaker")} />
+            <SettingRow icon="alert" title="Emergency contact" detail={account.settings?.emergency_contact_phone ? account.settings.emergency_contact_name || account.settings.emergency_contact_phone : "Add a phone number for SOS calls"} onClick={() => { setContactName(account.settings?.emergency_contact_name || ""); setContactPhone(account.settings?.emergency_contact_phone || ""); setContactError(""); setContactStatus(""); setView("emergency"); }} />
+            <SettingRow icon="person" title="Trusted caretaker" detail={caretakers.length ? `${caretakers.map(nameOf).join(", ")} · gets your SOS alerts` : "Link someone you trust"} onClick={() => setView("caretaker")} />
           </div>
-          <div className="mode-row"><span><strong>Caretaker mode preview</strong><small>See the simplified shared dashboard</small></span><Switch on={caretaker} setOn={setCaretaker} label="Caretaker mode preview" /></div>
+          <div className="mode-row"><span><strong>Caretaker mode</strong><small>Use this account to look after someone else</small></span><Switch on={caretaker} setOn={setCaretaker} label="Caretaker mode" /></div>
           <div className="setting-section">DETECTION THRESHOLDS</div>
           <div className="settings-card threshold-settings"><label>Warning distance (cm)<input aria-label="Warning distance" type="number" min="1" max="10000" value={account.settings!.warning_distance_cm} onChange={event => { const value = Number(event.target.value); if (value >= 1 && value <= 10000) account.updateSettings({ warning_distance_cm: value }); }} /></label><label>Warning confidence (%)<input aria-label="Warning confidence" type="number" min="1" max="100" value={Math.round(account.settings!.warning_confidence * 100)} onChange={event => { const value = Number(event.target.value); if (value >= 1 && value <= 100) account.updateSettings({ warning_confidence: value / 100 }); }} /></label><p>Applied when you start your next run.</p></div>
           <div className="account-footer"><strong>{account.displayName}</strong><span>{session?.user.email}</span><small role="status">{account.saving ? "Saving preferences…" : account.error ? "Changes need to be saved" : "Preferences saved to your account"}</small>{account.error && <><p className="vision-error" role="alert">{account.error}</p><button className="auth-text-button" onClick={account.retry}>Retry saving</button></>}{logoutError && <p className="vision-error" role="alert">{logoutError}</p>}<button className="camera-action stop" disabled={signingOut} onClick={() => void logout()}>{signingOut ? "Logging out…" : "Log out"}</button></div>
         </>}
+        {view === "emergency" && <div className="caretaker-settings">
+          <div className="setting-section">TRUSTED EMERGENCY CONTACT</div>
+          <div className="settings-card threshold-settings">
+            <label>Contact name<input type="text" autoComplete="name" maxLength={80} value={contactName} onChange={event => setContactName(event.target.value)} placeholder="Name" /></label>
+            <label>Phone number<input type="tel" autoComplete="tel" maxLength={25} value={contactPhone} onChange={event => setContactPhone(event.target.value)} placeholder="+15551234567" /></label>
+          </div>
+          {contactError && <p className="vision-error" role="alert">{contactError}</p>}
+          {contactStatus && <p role="status">{contactStatus}</p>}
+          <Button className="sheet-primary" disabled={contactSaving} onClick={() => void saveContact()}>{contactSaving ? "Saving…" : "Save emergency contact"}</Button>
+          <div className="permission-note"><Icon name="shield" size={20} /><span>"Call" opens the phone dialer; it doesn't place the call by itself. SOS alerts and location go to your linked caretaker instead.</span></div>
+        </div>}
         {view === "accessibility" && <>
           <div className="setting-section">DISPLAY & MOTION</div>
           <div className="settings-card">
@@ -292,15 +341,7 @@ function SettingsSheet({ close, caretaker, setCaretaker, preferences, setPrefere
           <Button className="sheet-primary" onClick={() => setPaired(!paired)}>{paired ? "Reset preview" : "Preview pairing"}</Button>
           <div className="prototype-note">Hardware connection is simulated in this prototype.</div>
         </div>}
-        {view === "caretaker" && <div className="caretaker-settings">
-          <div className="caretaker-profile"><span>MC</span><div><strong>Maya Chen</strong><small>Example contact · Preview only</small></div></div>
-          <div className="settings-card">
-            <SettingRow icon="location" title="Share live location" detail="Preview preference · no location is shared"><Switch on={location} setOn={setLocation} label="Share live location" /></SettingRow>
-            <SettingRow icon="camera" title="Camera requests" detail="Always requires your approval"><span className="locked-label">ASK</span></SettingRow>
-            <SettingRow icon="alert" title="SOS emergency alerts" detail="Emergency contacts aren’t connected"><span className="locked-label">NOT SET UP</span></SettingRow>
-          </div>
-          <div className="permission-note"><Icon name="shield" size={20} />You stay in control. Camera access can never begin without your approval.</div>
-        </div>}
+        {view === "caretaker" && <CaretakerSettings />}
         </div>
       </div>
     </div>
@@ -322,7 +363,7 @@ export default function App() {
     setActiveTab(next);
   }
   const [settings, setSettings] = useState(false);
-  const [caretaker, setCaretaker] = useState(false);
+  const [caretaker, setCaretaker] = useCaretakerMode();
   const [previewPreferences, setPreviewPreferences] = useState({ location: false, paired: false });
   const saved = account.settings!;
   const preferences: Preferences = { ...previewPreferences, voice: saved.voice_enabled, reconnect: saved.automatic_reconnect, volume: saved.volume, largeText: saved.large_text, reduceMotion: saved.reduce_motion };
@@ -330,21 +371,21 @@ export default function App() {
     setPreviewPreferences({ location: next.location, paired: next.paired });
     account.updateSettings({ voice_enabled: next.voice, automatic_reconnect: next.reconnect, volume: next.volume, large_text: next.largeText, reduce_motion: next.reduceMotion });
   }
-  return (
-    <main className="app-shell">
-      <div className={`phone${preferences.largeText ? " large-text" : ""}${preferences.reduceMotion ? " reduce-motion" : ""}`}>
-        <div className="viewport" data-tab={tab} style={{ "--screen-offset": `${direction * 14}px` } as CSSProperties} inert={settings}>
-          {tab === "home" && <Home setTab={setTab} openSettings={() => setSettings(true)} caretaker={caretaker} />}
-          {tab === "safety" && <Safety caretaker={caretaker} />}
-          {tab === "camera" && <VisionCamera caretaker={caretaker} />}
-          {tab === "history" && <History startCamera={() => setTab("camera")} />}
-        </div>
-        <nav className="tabbar" aria-label="Primary navigation" inert={settings}>
-          <span className="tab-indicator" aria-hidden="true" style={{ transform: `translateX(${tabs.findIndex(item => item.id === tab) * 100}%)` }} />
-          {tabs.map((item) => <Button key={item.id} className={`tab ${tab === item.id ? "active" : ""}`} onClick={() => setTab(item.id)} aria-current={tab === item.id ? "page" : undefined}><Icon name={item.id} size={22} /><span>{item.label}</span></Button>)}
-        </nav>
-        <MotionPresence open={settings} className="settings-presence" onClose={() => setSettings(false)}><SettingsSheet preferences={preferences} setPreferences={setPreferences} close={() => setSettings(false)} caretaker={caretaker} setCaretaker={setCaretaker} /></MotionPresence>
+  const phone = (
+    <div className={`phone${preferences.largeText ? " large-text" : ""}${preferences.reduceMotion ? " reduce-motion" : ""}`}>
+      {!caretaker && <div className="care-banner-slot" inert={settings}><LiveShareBanner /></div>}
+      <div className="viewport" data-tab={tab} style={{ "--screen-offset": `${direction * 14}px` } as CSSProperties} inert={settings}>
+        {tab === "home" && <Home setTab={setTab} openSettings={() => setSettings(true)} caretaker={caretaker} />}
+        {tab === "safety" && (caretaker ? <CaretakerSafety /> : <Safety openSettings={() => setSettings(true)} />)}
+        {tab === "camera" && (caretaker ? <CaretakerCamera /> : <VisionCamera />)}
+        {tab === "history" && <History startCamera={() => setTab("camera")} />}
       </div>
-    </main>
+      <nav className="tabbar" aria-label="Primary navigation" inert={settings}>
+        <span className="tab-indicator" aria-hidden="true" style={{ transform: `translateX(${tabs.findIndex(item => item.id === tab) * 100}%)` }} />
+        {tabs.map((item) => <Button key={item.id} className={`tab ${tab === item.id ? "active" : ""}`} onClick={() => setTab(item.id)} aria-current={tab === item.id ? "page" : undefined}><Icon name={item.id} size={22} /><span>{item.label}</span></Button>)}
+      </nav>
+      <MotionPresence open={settings} className="settings-presence" onClose={() => setSettings(false)}><SettingsSheet preferences={preferences} setPreferences={setPreferences} close={() => setSettings(false)} caretaker={caretaker} setCaretaker={setCaretaker} /></MotionPresence>
+    </div>
   );
+  return <main className="app-shell">{caretaker ? <CaretakerProvider>{phone}</CaretakerProvider> : phone}</main>;
 }

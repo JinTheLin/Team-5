@@ -46,8 +46,8 @@ const path = require("node:path");
       assert.equal(await page.locator(".statusbar,.homebar").count(), 0);
       await page.getByRole("button", {name:"Emergency help", exact:true}).click();
       await check("SOS");
-      await page.getByRole("button", {name:"Preview SOS", exact:true}).click();
-      await page.getByRole("button", {name:"Done", exact:true}).click();
+      // SOS really sends now, so only check the sheet's layout and close it.
+      await page.getByRole("dialog", {name:"Emergency assistance"}).getByRole("button", {name:"Close", exact:true}).click();
       for (const name of ["Safety","Camera","Home"]) {
         await page.getByRole("navigation").getByRole("button", {name,exact:true}).click();
         await check(name);

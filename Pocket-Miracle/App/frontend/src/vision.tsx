@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { useAccount, useAuth } from "./account";
+import type { UserCare } from "./care";
 
 export const VISION_URL = (import.meta.env.VITE_VISION_URL || "http://127.0.0.1:8765").replace(/\/$/, "");
 export type VisionStatus = {
@@ -20,6 +21,7 @@ export type VisionStatus = {
   history_sync?: { pending: number; error: string };
   detections: { name: string; confidence: number; ahead: boolean; eligible: boolean }[];
   last_warning: { message: string; at: number; simulated: boolean } | null;
+  care?: UserCare;
 };
 type Config = { mode: "cane" | "webcam"; host: string; simulated_cm: number | null; send_warnings: boolean };
 type Connection = { status: VisionStatus | null; connected: boolean; busy: boolean; error: string; command: (action: "start" | "stop" | "disconnect", config?: Config) => Promise<void> };
@@ -101,7 +103,7 @@ export function useVision() {
   return context;
 }
 
-export function VisionImage({ status, alt }: { status: VisionStatus; alt: string }) {
+export function VisionImage({ status, alt, path = "/api/frame.jpg" }: { status: VisionStatus; alt: string; path?: string }) {
   const { session } = useAuth();
   const accessToken = session?.access_token;
   const [src, setSrc] = useState("");
@@ -109,7 +111,7 @@ export function VisionImage({ status, alt }: { status: VisionStatus; alt: string
   useEffect(() => {
     if (!accessToken) { setSrc(""); return; }
     const controller = new AbortController();
-    void fetch(`${VISION_URL}/api/frame.jpg?session=${status.session_id}&frame=${status.frame_id}`, {
+    void fetch(`${VISION_URL}${path}?session=${status.session_id}&frame=${status.frame_id}`, {
       headers: { Authorization: `Bearer ${accessToken}` }, signal: controller.signal,
     }).then(async response => {
       if (!response.ok) throw new Error("No current frame");
@@ -120,7 +122,7 @@ export function VisionImage({ status, alt }: { status: VisionStatus; alt: string
       currentUrl.current = url; setSrc(url);
     }).catch(() => { if (!controller.signal.aborted) setSrc(""); });
     return () => controller.abort();
-  }, [status.session_id, status.frame_id, accessToken]);
+  }, [status.session_id, status.frame_id, accessToken, path]);
   useEffect(() => () => { if (currentUrl.current) URL.revokeObjectURL(currentUrl.current); }, []);
   return src ? <img src={src} alt={alt} /> : <div className="camera-mini-empty">Waiting for a processed frame…</div>;
 }

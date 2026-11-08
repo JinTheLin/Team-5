@@ -58,8 +58,10 @@ available to that account after the existing run ends.
 
 Preferences save automatically with a short debounce. Thresholds and the
 voice preference apply on the next run. Volume remains a saved preference;
-the hardware volume endpoint is not implemented. Pairing, caretaker sharing,
-fall detection, location, and SOS remain labeled previews/unconnected features.
+the hardware volume endpoint is not implemented. Bluetooth pairing and fall
+detection remain labeled previews. Caretaker linking, live-view approval, SOS
+and SOS location run through the laptop service; see `Computer Vision/README.md`
+→ Caretaker mode. Caretaker links are stored on the laptop, not in Supabase.
 
 ## Verification
 

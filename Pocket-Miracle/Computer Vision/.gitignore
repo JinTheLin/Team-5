@@ -5,3 +5,4 @@ __pycache__/
 runs/
 # Images and datasets are too big for git; share them through Roboflow instead.
 data/
+!models/*.pt

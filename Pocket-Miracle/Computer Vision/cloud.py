@@ -17,7 +17,14 @@ def iso_time(timestamp=None):
 
 
 class CloudError(Exception):
-    pass
+    def __init__(self, message, status=None):
+        super().__init__(message)
+        self.status = status
+
+    @property
+    def permanent(self):
+        """Supabase rejected the request itself; sending it again won't help."""
+        return self.status is not None and 400 <= self.status < 500 and self.status not in (408, 425, 429)
 
 
 class Cloud:
@@ -27,7 +34,11 @@ class Cloud:
         self.url = os.environ.get("SUPABASE_URL", config["url"]).rstrip("/")
         self.key = os.environ.get("SUPABASE_PUBLISHABLE_KEY", config["publishableKey"])
         self.cache = {}
+        self.emails = {}
         self.lock = threading.Lock()
+
+    def email(self, user_id):
+        return self.emails.get(user_id)
 
     def request(self, path, token, method="GET", payload=None):
         headers = {"apikey": self.key, "Authorization": f"Bearer {token}",
@@ -46,7 +57,7 @@ class Cloud:
                 detail = json.loads(body).get("message") or json.loads(body).get("msg") or "Request failed."
             except ValueError:
                 detail = "Request failed."
-            raise CloudError(f"Supabase {error.code}: {detail}") from None
+            raise CloudError(f"Supabase {error.code}: {detail}", error.code) from None
         except (urllib.error.URLError, TimeoutError, OSError):
             raise CloudError("Cannot reach Supabase. Check the laptop's internet connection.") from None
 
@@ -74,6 +85,7 @@ class Cloud:
             if len(self.cache) >= 128:
                 self.cache.clear()
             self.cache[digest] = (min(time.time() + 30, expires), user["id"])
+            self.emails[user["id"]] = user.get("email")
         return user["id"]
 
     def settings(self, token):
@@ -141,6 +153,11 @@ class HistorySync:
                 self.errors[user] = str(error)
                 if isinstance(error, PermissionError):
                     self.tokens.pop(user, None)
+                elif error.permanent:
+                    # Retrying a rejected row forever would block every later row for this user.
+                    self.db.execute("delete from outbox where id=?", (key,))
+                    self.db.commit()
+                    return True
             return False
         with self.lock:
             self.db.execute("delete from outbox where id=?", (key,))

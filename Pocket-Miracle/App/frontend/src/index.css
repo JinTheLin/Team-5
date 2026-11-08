@@ -517,3 +517,32 @@ button,input,a { scroll-margin:24px; }
   *,*::before,*::after { animation:none!important; transition:none!important; }
 }
 .reduce-motion *,.reduce-motion *::before,.reduce-motion *::after { animation:none!important; transition:none!important; }
+
+/* Caretaker link, live-view approval and SOS */
+.care-banner-slot:empty { display:none; }
+.care-banner-slot { padding:12px 16px 0; }
+.care-banner-slot .care-banner { margin-top:0; }
+.care-choice { grid-column:1/-1; display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.approval-card .care-decline { color:var(--muted); background:#f1f0f5; }
+.sharing-status .care-stop { min-height:40px; padding:0 14px; color:var(--coral); border:1px solid rgba(200,95,99,.18); border-radius:12px; background:#fff4f3; font-weight:700; cursor:pointer; }
+.sharing-status span:nth-child(2) { flex:1; }
+.caretaker-profile > div { flex:1; min-width:0; overflow-wrap:anywhere; }
+.care-code { padding:16px; display:grid; gap:8px; text-align:center; }
+.care-code strong { font-size:34px; font-weight:750; letter-spacing:.18em; color:var(--indigo); font-variant-numeric:tabular-nums; }
+.care-code small { color:var(--muted); font-size:13px; line-height:1.5; }
+.caretaker-hero .care-code-field { color:white; }
+.caretaker-hero .care-code-field input { letter-spacing:.3em; text-align:center; font-variant-numeric:tabular-nums; }
+.caretaker-hero .care-link-button { margin-top:12px; color:var(--indigo); background:white; border:0; }
+.caretaker-hero .vision-error { margin-top:12px; }
+.care-alert { margin-top:12px; }
+.care-alert a, .location-empty a { color:var(--indigo); font-weight:650; }
+.care-unlink { margin-top:20px; }
+.care-banner.approval-card strong, .care-alert strong { font-size:15px; }
+.care-banner.approval-card small, .care-alert small { font-size:13px; line-height:1.5; }
+.care-banner.approval-card button { min-height:48px; font-size:15px; }
+.care-banner-slot { max-height:40%; overflow-y:auto; flex-shrink:0; }
+.sharing-status .care-stop { min-height:44px; min-width:64px; }
+.care-alert a, .location-empty a { display:inline-flex; align-items:center; min-height:44px; min-width:44px; }
+@media (max-height:500px) { .care-banner-slot { max-height:30%; padding-top:8px; } }
+.home-call { margin-top:10px; }
+.care-code .care-read { color:var(--indigo); background:var(--lavender); box-shadow:none; }

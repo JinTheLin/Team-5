@@ -37,6 +37,27 @@ class OutboxTests(unittest.TestCase):
             finally:
                 replay.close()
 
+    def test_rejected_row_does_not_block_the_queue(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cloud = Mock()
+            sync = HistorySync(cloud, Path(directory) / "queue.sqlite3", autostart=False)
+            try:
+                sync.register("user-a", "token-a")
+                sync.push("user-a", "warnings", {"id": "bad"})
+                sync.push("user-a", "warnings", {"id": "good"})
+                cloud.request.side_effect = CloudError("Supabase 503: busy", 503)
+                self.assertFalse(sync.flush_once())  # temporary: keep it and retry later
+                self.assertEqual(sync.status("user-a")["pending"], 2)
+                cloud.request.side_effect = CloudError("Supabase 400: violates constraint", 400)
+                self.assertTrue(sync.flush_once())   # permanent: drop it and move on
+                self.assertIn("400", sync.status("user-a")["error"])
+                cloud.request.side_effect = None
+                self.assertTrue(sync.flush_once())
+                self.assertEqual(cloud.request.call_args.args[2:], ("POST", {"id": "good"}))
+                self.assertEqual(sync.status("user-a")["pending"], 0)
+            finally:
+                sync.close()
+
     def test_missing_auth_cannot_reach_supabase(self):
         cloud = Cloud()
         cloud.request = Mock()

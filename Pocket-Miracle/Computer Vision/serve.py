@@ -15,6 +15,7 @@ import cv2
 from cane_logic import Detection, WarningDecider
 from test_stream import CaneVoice, FixedSonar, SonarPoller, make_source
 from cloud import Cloud, CloudError, HistorySync, iso_time
+from care import Care
 
 HERE = Path(__file__).resolve().parent
 FRAME_TIMEOUT = 3.0
@@ -32,14 +33,19 @@ def validate_config(data):
     mode = data.get("mode", "cane")
     if mode not in ("cane", "webcam"):
         raise ValueError("Choose cane or webcam.")
-    host = str(data.get("host", "172.20.10.3"))
+    host = str(data.get("host", "172.20.10.3")).strip()
     if mode == "cane":
+        # "172.20.10.3" is the real cane (control on port 80, video on 81).
+        # "127.0.0.1:8080" is the simulated cane (video on the next port, like the firmware).
+        ip, _, port = host.partition(":")
         try:
-            address = ipaddress.IPv4Address(host)
+            address = ipaddress.IPv4Address(ip)
         except ipaddress.AddressValueError:
             raise ValueError("Enter the cane's local IPv4 address.") from None
         if not (address.is_private and not address.is_unspecified and not address.is_multicast):
             raise ValueError("The cane address must be on a local network.")
+        if port and not (port.isdigit() and 1 <= int(port) <= 65534):
+            raise ValueError("The cane port must be a number from 1 to 65534.")
     distance = data.get("simulated_cm")
     if distance is not None:
         if mode != "webcam":
@@ -51,11 +57,12 @@ def validate_config(data):
 
 
 class Session:
-    def __init__(self, config, model_path, owner_id, history=None):
+    def __init__(self, config, model_paths, owner_id, history=None):
         self.config = {**config, "history_min_confidence": HISTORY_MIN_CONFIDENCE,
                        "history_confirm_frames": HISTORY_CONFIRM_FRAMES,
                        "history_window_frames": HISTORY_WINDOW_FRAMES, "history_watch_only": True}
-        self.model_path = model_path
+        # Stock COCO model first, then our door/stairs model if it's installed.
+        self.model_paths = [model_paths] if isinstance(model_paths, (str, Path)) else list(model_paths)
         self.id = str(uuid.uuid4())
         self.owner_id = owner_id
         self.history = history
@@ -79,7 +86,7 @@ class Session:
             self.history.push(self.owner_id, "detection_sessions", {
                 "id": self.id, "user_id": self.owner_id, "source_type": config["mode"],
                 "started_at": iso_time(), "last_heartbeat_at": iso_time(), "status": "starting",
-                "model_name": Path(model_path).name, "config": self.config,
+                "model_name": "+".join(Path(p).name for p in self.model_paths), "config": self.config,
                 "simulated_distance_cm": config["simulated_cm"],
             })
 
@@ -188,14 +195,17 @@ class Session:
 
     def run(self):
         try:
-            model = load_model(self.model_path)
+            models = [load_model(path) for path in self.model_paths]
             if self.stop_event.is_set():
                 return
             cfg = self.config
-            self.source, _ = make_source("0" if cfg["mode"] == "webcam" else cfg["host"], False)
+            ip, _, port = cfg["host"].partition(":")
+            port = int(port or 80)
+            base = f"http://{ip}" if port == 80 else f"http://{ip}:{port}"
+            self.source, _ = make_source("0" if cfg["mode"] == "webcam" else f"http://{ip}:{port + 1}/stream", False)
             self.sonar = (FixedSonar(cfg["simulated_cm"]) if cfg["simulated_cm"] is not None else
-                          SonarPoller(f"http://{cfg['host']}/distance") if cfg["mode"] == "cane" else None)
-            self.voice = CaneVoice(f"http://{cfg['host']}", on_delivery=self.record_delivery) if cfg["send_warnings"] else None
+                          SonarPoller(f"{base}/distance") if cfg["mode"] == "cane" else None)
+            self.voice = CaneVoice(base, on_delivery=self.record_delivery) if cfg["send_warnings"] else None
             for component in (self.source, self.sonar, self.voice):
                 if component:
                     component.start()
@@ -223,7 +233,8 @@ class Session:
                 last_id = frame_id
                 captured_at = self.source.last_frame_time
                 started = time.perf_counter()
-                result = model.predict(frame, conf=min(.35, self.config.get("warning_confidence", .75)), imgsz=320, agnostic_nms=True, verbose=False)[0]
+                results = [(model, model.predict(frame, conf=min(.35, self.config.get("warning_confidence", .75)), imgsz=320, agnostic_nms=True, verbose=False)[0])
+                           for model in models]
                 elapsed = (time.perf_counter() - started) * 1000
                 if self.stop_event.is_set():
                     break
@@ -233,9 +244,10 @@ class Session:
                     self.history_candidates.clear()
                     continue
                 detections = []
-                for box in result.boxes:
-                    coords = box.xyxy[0].tolist()
-                    detections.append(Detection(model.names[int(box.cls[0])], float(box.conf[0]), *coords))
+                for model, result in results:
+                    for box in result.boxes:
+                        coords = box.xyxy[0].tolist()
+                        detections.append(Detection(model.names[int(box.cls[0])], float(box.conf[0]), *coords))
                 cm, on, timestamp = self.sonar.reading() if self.sonar else (None, None, None)
                 if self.voice:
                     for word in self.voice.take_failed():
@@ -290,12 +302,13 @@ class Session:
 
 
 class VisionService:
-    def __init__(self, model_path, cloud, history=None):
-        self.model_path = model_path
+    def __init__(self, model_paths, cloud, history=None, care=None):
+        self.model_paths = model_paths
         self.session = None
         self.lock = threading.Lock()
         self.cloud = cloud
         self.history = history
+        self.care = care or Care(email=getattr(cloud, "email", lambda user_id: None))
 
     def authenticate(self, authorization):
         token = authorization[7:] if authorization.startswith("Bearer ") else ""
@@ -317,7 +330,7 @@ class VisionService:
                 self.session.thread.join(timeout=6)
                 if self.session.thread.is_alive():
                     raise ValueError("Previous session is still stopping. Try again shortly.")
-            self.session = Session(config, self.model_path, user, self.history)
+            self.session = Session(config, self.model_paths, user, self.history)
             self.session.thread.start()
         return self.status(user)
 
@@ -335,7 +348,41 @@ class VisionService:
             result.update(shared_busy=True, detail="The shared camera is currently in use. Try again when that run ends.")
         if self.history and user:
             result["history_sync"] = self.history.status(user)
+        if user:
+            result["care"] = self.care.user_view(user)
         return result
+
+    def detection_status(self, user):
+        """The user's own run, without the caretaker or history extras."""
+        session = self.session
+        return session.snapshot() if session and session.owner_id == user else {"phase": "idle"}
+
+    def frame_for(self, user):
+        session = self.session
+        if not session or session.owner_id != user:
+            return None
+        with session.lock:
+            return session.jpeg if session.state["phase"] == "live" else None
+
+    def care_action(self, path, data, user):
+        care = self.care
+        if path == "/api/care/code":
+            return care.create_code(user)
+        if path == "/api/care/link":
+            return {"linked": care.link(user, data.get("code", ""))}
+        if path == "/api/care/unlink":
+            care.unlink(user, data.get("caretaker_id"))
+        elif path == "/api/care/sos":
+            return {"alert": care.sos(user, data.get("location"))}
+        elif path == "/api/care/live/request":
+            care.request_live(user)
+        elif path == "/api/care/live/respond":
+            care.respond(user, data.get("approve") is True)
+        elif path == "/api/care/live/end":
+            care.end_live(user)
+        else:
+            return None
+        return {"ok": True}
 
 
 def allowed_origin(origin):
@@ -387,13 +434,14 @@ def make_handler(service):
             path = urlparse(self.path).path
             if path == "/api/status":
                 self.respond(service.status(user))
-            elif path == "/api/frame.jpg":
-                session = service.session
-                if session and session.owner_id == user:
-                    with session.lock:
-                        jpeg = session.jpeg if session.state["phase"] == "live" else None
+            elif path == "/api/care/status":
+                self.respond(service.care.caretaker_view(user, service.detection_status))
+            elif path in ("/api/frame.jpg", "/api/care/frame.jpg"):
+                if path == "/api/frame.jpg":
+                    jpeg = service.frame_for(user)
                 else:
-                    jpeg = None
+                    watched = service.care.can_watch(user)
+                    jpeg = service.frame_for(watched) if watched else None
                 if jpeg:
                     self.send_response(200)
                     self.send_header("Content-Type", "image/jpeg")
@@ -427,8 +475,11 @@ def make_handler(service):
                     self.respond(service.stop(user))
                 elif self.path == "/api/disconnect":
                     result = service.stop(user)
+                    service.care.end_live(user)  # logging out ends camera sharing
                     if service.history:
                         service.history.disconnect(user)
+                    self.respond(result)
+                elif (result := service.care_action(self.path, data, user)) is not None:
                     self.respond(result)
                 else:
                     self.respond({"error": "Not found."}, 404)
@@ -451,10 +502,17 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--model", default=str(HERE / "yolo11n.pt"))
+    parser.add_argument("--custom-model", default=str(HERE / "models/door_stairs.pt"),
+                        help="our door/stairs model; skipped if the file is missing")
     args = parser.parse_args()
+    models = [args.model]
+    if Path(args.custom_model).exists():
+        models.append(args.custom_model)
+    else:
+        print(f"No custom model at {args.custom_model}: doors and stairs won't be detected.", flush=True)
     cloud = Cloud()
     history = HistorySync(cloud, HERE / "data/history_queue.sqlite3")
-    service = VisionService(args.model, cloud, history)
+    service = VisionService(models, cloud, history, Care(HERE / "data/care_links.json", cloud.email))
     server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(service))
     print(f"Laptop vision service: http://127.0.0.1:{args.port}", flush=True)
     print("Open the app's Camera tab to start. No camera opens until you choose Start.", flush=True)

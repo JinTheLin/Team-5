@@ -3,7 +3,7 @@ import { VisionImage, useVision } from "./vision";
 import { useAccount } from "./account";
 import { Glyph, Spinner } from "./ui";
 
-export default function VisionCamera({ caretaker }: { caretaker: boolean }) {
+export default function VisionCamera() {
   const { status, connected, busy, error, command } = useVision();
   const { settings } = useAccount();
   const [mode, setMode] = useState<"cane" | "webcam">(status?.mode || "cane");
@@ -15,7 +15,6 @@ export default function VisionCamera({ caretaker }: { caretaker: boolean }) {
   const active = connected && status && ["loading", "waiting", "live"].includes(status.phase);
   const title = !connected ? "Laptop service offline" : status?.phase === "live" ? "Detection is running" : status?.phase === "loading" ? "Loading model…" : status?.phase === "waiting" ? "Waiting for the camera" : status?.phase === "error" ? "Detection needs attention" : "Ready when you are";
 
-  if (caretaker) return <div className="screen"><header className="page-header"><div><div className="overline">CAMERA</div><div className="page-title">Camera stays private.</div></div></header><div className="location-empty"><h2>Local viewing only</h2><p>Switch off caretaker preview to control laptop detection. Remote camera sharing is not connected.</p></div></div>;
 
   return <div className="screen camera-screen">
     <header className="page-header"><div><div className="overline">LAPTOP VISION</div><div className="page-title">Your surroundings.</div></div><span className="private-pill">LOCAL ONLY</span></header>
@@ -32,7 +31,8 @@ export default function VisionCamera({ caretaker }: { caretaker: boolean }) {
           <label><input type="radio" name="source" checked={mode === "webcam"} onChange={() => setMode("webcam")} />Laptop webcam</label>
         </div>
         <div className="source-detail" key={mode}>{mode === "cane" ? <>
-          <label className="vision-field">Cane IP address<input value={host} onChange={event => setHost(event.target.value)} required placeholder="172.20.10.3" inputMode="decimal" /></label>
+          <label className="vision-field">Cane address<input value={host} onChange={event => setHost(event.target.value)} required placeholder="172.20.10.3" autoCapitalize="off" spellCheck={false} /></label>
+          <p className="vision-note">The real cane prints its address in the Serial Monitor. For the simulated cane (python sim_cane.py) use 127.0.0.1:8080.</p>
           <label className="vision-check"><input type="checkbox" checked={settings!.voice_enabled && voice} disabled={!settings!.voice_enabled} onChange={event => setVoice(event.target.checked)} />Send qualifying warnings to the cane speaker</label>
           {!settings!.voice_enabled && <p className="vision-note">Voice announcements are turned off in Settings.</p>}
         </> : <>
@@ -52,7 +52,7 @@ export default function VisionCamera({ caretaker }: { caretaker: boolean }) {
       <div className="detection-list">{live && status.detections.length ? status.detections.map((detection, index) => <div className="detection-item" key={`${detection.name}-${index}`}><span className="detection-symbol" aria-hidden="true">{detection.ahead ? "↑" : "↗"}</span><span><strong>{detection.name}</strong><small>{detection.ahead ? "Ahead" : "Off to the side"}{!detection.eligible ? " · below warning criteria" : ""}</small></span><span><strong>{Math.round(detection.confidence * 100)}%</strong><small>confidence</small></span></div>) : <p className="vision-note detection-empty">{live ? "No objects detected in the current frame." : "Detections appear here when video arrives."}</p>}</div>
       <p className="vision-note">{status.detail}</p>
       {status.last_warning && <div className="obstacle-alert"><span><strong>Last warning{status.last_warning.simulated ? " · simulated distance" : ""}</strong><small>{status.last_warning.message}</small><em>{new Date(status.last_warning.at * 1000).toLocaleTimeString()} · {status.mode === "webcam" ? "Shown locally; not sent to a cane" : status.voice_status || "Queued for cane speaker"}</em></span></div>}
-      <p className="vision-note">Stock model recognizes everyday objects. Doors, stairs, and curbs still need the custom model.</p>
+      <p className="vision-note">The stock model finds people, furniture and vehicles. Our model adds doors and stairs. Curbs are not detected yet.</p>
     </>}
   </div>;
 }
